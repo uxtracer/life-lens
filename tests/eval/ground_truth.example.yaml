@@ -1,0 +1,47 @@
+# Vision pipeline 评测集模板 — 复制为 ground_truth.yaml 并填入你自己的 photo_id
+#
+# 用法:
+#   cp tests/eval/ground_truth.example.yaml tests/eval/ground_truth.yaml
+#   # 编辑 ground_truth.yaml 把下面占位 photo_id 替换成你自己 db 里的 id
+#   # photo_id 在 Browse 详情或 sqlite3 ~/.life_lens/lens.db "SELECT photo_id, ... FROM photos" 里看
+#   python tests/eval/run_eval.py
+#
+# 每张 case 的检查项(任一失败标 FAIL):
+#   - expected_face_count: 必须严格相等
+#   - expected_persons:    persons[].name(filter 非空)集合相等
+#   - description_must_contain:     description 必须包含其中**全部**关键词
+#   - description_must_not_contain: description 必须不出现其中**任一**词
+#   - description_role_check:       (多人 case 关键)每个人名邻近 N 字符内必须出现对应动作关键词
+#   - scene_keywords_any:           scene 字段含其中**任一**关键词
+#   - tags_must_contain:            tags 数组含其中全部关键词
+#
+# 评测脚本默认读 ~/.life_lens/lens.db,依赖照片已经走完 vision pipeline。
+# 改 prompt / vision 模型后跑一遍对比 baseline。
+#
+# 真正用法是你针对自己典型场景的几张照片建 case(例如:无人风景 / 单人 / 多人合影 / 你
+# 特别想 catch 的 edge case),数量 10-20 张够。每改一次 prompt 跑一遍看不退步。
+#
+# tests/eval/ground_truth.yaml 在 .gitignore 之外,但 publish.sh 会 rsync 排除 —
+# 你自己的私有评测集不会进开源版本。
+
+cases:
+
+  # ============ 例 1: 无人风景 ============
+  - photo_id: REPLACE_WITH_YOUR_PHOTO_ID_1
+    file: IMG_xxxx.HEIC
+    type: 无人-风景(模板)
+    expected_face_count: 0
+    expected_persons: []
+    description_must_contain: [山, 风景]
+    description_must_not_contain: [男子, 女子, 自拍, 合影]
+    scene_keywords_any: [山, 户外, 风景]
+
+  # ============ 例 2: 单人(已命名) ============
+  - photo_id: REPLACE_WITH_YOUR_PHOTO_ID_2
+    file: IMG_yyyy.HEIC
+    type: 单人(模板)
+    expected_face_count: 1
+    expected_persons: [张三]   # 替换成你 db 里实际人物名(种子或 Apple 命名)
+    description_must_contain: [张三]
+    description_must_not_contain: [男子, 女子, 戴帽子的人]
+    scene_keywords_any: [户外, 城市]

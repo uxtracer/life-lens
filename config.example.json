@@ -1,0 +1,28 @@
+{
+  "_comment": "复制此文件为 ~/.life_lens/config.json 再填实际 key。JSON 不支持注释,_comment 字段会被代码忽略。",
+
+  "amap_key": "",
+  "_amap_key_note": "高德地图 API key(必填)— 用于 GPS → 地点名 反编码,'我去过哪些地方'类查询要靠它。申请:https://lbs.amap.com/  → 控制台 → 应用管理 → 添加应用 → 添加 key,服务平台选 Web 服务。免费 5000 次/天。",
+
+  "llm": {
+    "default": "deepseek",
+    "providers": {
+      "deepseek": {
+        "kind": "openai-compat",
+        "model": "deepseek-v4-flash",
+        "api_key": "sk-YOUR-DEEPSEEK-KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "label": "DeepSeek Chat (便宜+中文好,推荐)"
+      },
+      "openai": {
+        "kind": "openai-compat",
+        "model": "gpt-4o-mini",
+        "api_key": "sk-YOUR-OPENAI-KEY",
+        "base_url": "https://api.openai.com/v1",
+        "label": "OpenAI"
+      }
+    }
+  },
+
+  "_llm_note": "v0.4 起 LLM 只支持 RESTful API(OpenAI 兼容格式),所有 provider 一种 shape:api_key + base_url + model。default 字段写哪个 provider id,首次启动默认用它。\nlife_lens chat 用量并不复杂(选工具 + 写中文回答),推荐 DeepSeek v4-flash 性价比最优。\n其他可选:OpenAI gpt-4o-mini / Together / 任何兼容服务。"
+}

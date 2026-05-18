@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# venv
+.venv/
+.venv_lens/
+venv/
+
+# 数据
+lens.db
+lens.db-*
+.cache/
+*.lens.json
+
+# 用户私人样本 / 种子原图(避免误提交)
+sample/
+seedface/
+seeds/
+
+# 导出包(含 lens.db,用户隐私数据;一次性产物不进仓库)
+export/
+
+# 评测报告(每次跑生成的产物,不进任何仓库)
+tests/eval/reports/
+# 私有 chat 评测(开发中,暂不入库)
+tests/eval/chat/
+# 注:tests/eval/ground_truth.yaml 含真实照片标注 — 保留在私有 monorepo 跟踪(便于备份),
+# 公开发版时由 scripts/publish.sh 的 rsync --exclude 挡掉,不进公开仓库
+
+# 系统
+.DS_Store
+.idea/
+.vscode/

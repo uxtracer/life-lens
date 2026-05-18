@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>life_lens</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+    <div class="brand">
+        <h1>Life Lens · 人生透镜</h1>
+        <p class="brand-tagline">用 AI 把你的照片库变成真正可以检索的人生记录</p>
+    </div>
+    <nav>
+        <button class="tab" data-page="settings">配置</button>
+        <button class="tab" data-page="faces">面孔</button>
+        <button class="tab" data-page="scan">扫描</button>
+        <button class="tab" data-page="browse">浏览</button>
+        <button class="tab" data-page="chat">问相册</button>
+    </nav>
+</header>
+
+<!-- 顶部 banner:Ollama/高德/LLM/数据源 未配齐时显示。JS 条件渲染 -->
+<div id="global-banner" class="global-banner hidden"></div>
+
+<main>
+    <!-- ========== Tab 1: 配置(Settings)========== -->
+    <section id="settings" class="page">
+        <p class="hint">按下方步骤把依赖配齐就可以去配置面孔然后扫描了。每一项的状态会实时检测,顶部 banner 显示"还差什么"。</p>
+
+        <!-- Card 1: Ollama vision 模型 -->
+        <div class="config-card" data-card="ollama">
+            <div class="config-card-head">
+                <span class="config-card-step">1</span>
+                <div class="config-card-title">
+                    <h3>🦙 本地视觉理解模型</h3>
+                    <p class="config-card-subtitle">用本地视觉模型把照片转成文字描述，计算在本地完成，照片不会上传，保护你的隐私</p>
+                </div>
+                <span class="config-card-status" id="card-ollama-status">⏳ 检测中</span>
+            </div>
+            <div class="config-card-body" id="card-ollama-body">
+                加载中……
+            </div>
+        </div>
+
+        <!-- Card 2: 高德 API key -->
+        <div class="config-card" data-card="amap">
+            <div class="config-card-head">
+                <span class="config-card-step">2</span>
+                <div class="config-card-title">
+                    <h3>🗺 高德 API</h3>
+                    <p class="config-card-subtitle">把照片 GPS 坐标转成城市、景点、商场名 — "我去过哪些地方"靠它</p>
+                </div>
+                <span class="config-card-status" id="card-amap-status">⏳</span>
+            </div>
+            <div class="config-card-body" id="card-amap-body">
+                加载中……
+            </div>
+        </div>
+
+        <!-- Card 3: LLM 文本模型 -->
+        <div class="config-card" data-card="llm">
+            <div class="config-card-head">
+                <span class="config-card-step">3</span>
+                <div class="config-card-title">
+                    <h3>🤖 对话模型</h3>
+                    <p class="config-card-subtitle">"问相册"用大语言模型生成回答 — 云端或本地均可</p>
+                </div>
+                <span class="config-card-status" id="card-llm-status">⏳</span>
+            </div>
+            <div class="config-card-body" id="card-llm-body">
+                加载中……
+            </div>
+        </div>
+
+        <!-- Card 4: 数据源 -->
+        <div class="config-card" data-card="sources">
+            <div class="config-card-head">
+                <span class="config-card-step">4</span>
+                <div class="config-card-title">
+                    <h3>📁 数据源</h3>
+                </div>
+                <span class="config-card-status" id="card-sources-status">⏳</span>
+            </div>
+            <div class="config-card-body">
+                <p class="hint">添加照片目录。任意含 jpg/heic 的本地路径,或 macOS Apple Photos 库(`~/Pictures/Photos Library.photoslibrary`)。Apple 路径首次会弹系统授权,允许"完全磁盘访问"后才能读。</p>
+                <form id="add-source-form">
+                    <div class="config-form-row">
+                        <input type="text" id="source-path" placeholder="点右边按钮选文件夹,或手动粘贴绝对路径" required>
+                        <button type="button" id="pick-folder-btn" class="secondary">📁 选文件夹</button>
+                        <button type="submit">添加</button>
+                    </div>
+                </form>
+                <ul id="source-list" class="list"></ul>
+            </div>
+        </div>
+
+        <!-- Card 5: 存储 -->
+        <div class="config-card" data-card="storage">
+            <div class="config-card-head">
+                <span class="config-card-step">5</span>
+                <div class="config-card-title">
+                    <h3>💾 存储</h3>
+                </div>
+            </div>
+            <div class="config-card-body" id="card-storage-body">
+                加载中……
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== Tab 2: 面孔 ========== -->
+    <section id="faces" class="page">
+        <p class="hint"><b>强烈建议先准备好核心面孔再扫描，这样扫描的时候可以直接把照片里的姓名对应上，避免后续重跑。</b> <br/>如果是 Apple Photos 数据源，系统可以直接读取其内部已识别并命名好的面孔信息，用户在 Photos App 里配置好即可。其它数据源可以在这里手动添加面孔，每个面孔 3-5 张单人照，最好是不同角度或者不同面部特征。<br/>后续使用过程中也可以在此界面持续更新姓名，只是更新后会触发相关照片重新扫描。</p>
+
+        <!-- 已命名面孔 -->
+        <div class="faces-section">
+            <div class="section-head">
+                <h3>已命名面孔</h3>
+                <button id="add-seed-btn" class="primary">添加面孔（上传种子照片）</button>
+            </div>
+            <div id="seed-list" class="cluster-list"></div>
+        </div>
+
+        <!-- 新建/追加种子表单(默认隐藏) -->
+        <div id="seed-form" class="seed-form hidden">
+            <h3 id="seed-form-title">添加面孔</h3>
+            <label>姓名 <input type="text" id="seed-name" placeholder="例如:张三"></label>
+            <label>种子照片（可多选，每张只含 ta 一个大面孔）<input type="file" id="seed-files" multiple accept="image/*,.heic,.HEIC"></label>
+            <div class="seed-form-actions">
+                <button id="seed-submit" class="primary">上传</button>
+                <button id="seed-cancel">取消</button>
+            </div>
+            <div id="seed-form-status" class="hint"></div>
+        </div>
+
+        <!-- 未命名面孔(扫描产生,等待命名)-->
+        <div class="faces-section">
+            <div class="section-head">
+                <h3>未命名面孔</h3>
+            </div>
+            <p class="hint">扫描产生的、还没归到任何已命名面孔的脸 — 给它起个名就纳入「已命名面孔」。</p>
+            <div id="cluster-list" class="cluster-list"></div>
+        </div>
+    </section>
+
+    <!-- ========== Tab 3: 扫描 ========== -->
+    <section id="scan" class="page">
+        <!-- segment control: 切 3 个子页 -->
+        <div class="scan-tabs">
+            <button class="scan-tab active" data-scan-page="current">当前扫描</button>
+            <button class="scan-tab" data-scan-page="runs">运行历史</button>
+            <button class="scan-tab" data-scan-page="reprocess">批量重跑</button>
+        </div>
+
+        <!-- 子页 1: 当前扫描 -->
+        <div class="scan-page active" data-scan-page="current">
+            <p class="hint">扫描按拍照时间正序处理(旧→新)。中途合盖/重启不影响,下次打开自动续传。</p>
+            <p class="hint" id="seed-first-tip"><b>建议先到「面孔」添加核心面孔再扫描</b> — 这样解析出的描述就能直接带上姓名。</p>
+
+            <!-- 全局卡:动态展示 当前正跑 / 上次未完成提示 / 全新开始 -->
+            <div id="scan-global" class="scan-global"></div>
+
+            <!-- 进度卡组件容器 -->
+            <div id="progress-card-mount"></div>
+
+            <!-- Sources 列表 -->
+            <h3 style="margin-top:32px">数据源</h3>
+            <div id="scan-source-list" class="list"></div>
+        </div>
+
+        <!-- 子页 2: 运行历史 -->
+        <div class="scan-page" data-scan-page="runs">
+            <p class="hint">每次扫描 / 重跑都是一个 Run。点击展开看进度、时间维度、失败列表;可继续未完成的 run 或重试失败照片。</p>
+            <div id="runs-list"></div>
+        </div>
+
+        <!-- 子页 3: 批量重跑 -->
+        <div class="scan-page" data-scan-page="reprocess">
+            <p class="hint">按 source / 时间范围 / 字段缺失 / 类型 / 关键词筛选要重跑的照片,选择 vision / derived / faces 阶段。</p>
+
+            <div class="reprocess-form">
+                <div class="rf-row">
+                    <label>Source(可多选)
+                        <select id="rf-source" multiple size="3"></select>
+                    </label>
+                    <label>时间从 <input type="date" id="rf-time-from"></label>
+                    <label>到 <input type="date" id="rf-time-to"></label>
+                </div>
+                <div class="rf-row">
+                    <label>字段筛选
+                        <select id="rf-missing">
+                            <option value="">(不筛)</option>
+                            <option value="vision">vision IS NULL(没跑过 vision)</option>
+                            <option value="description_empty">description 为空</option>
+                            <option value="description_short">description 短(&lt; 50 字)</option>
+                            <option value="role_mismatch">description 语义对齐差(可能是同义表达,也可能真错位 — 需核对)</option>
+                            <option value="people">people IS NULL</option>
+                            <option value="derived">derived IS NULL</option>
+                            <option value="location">没识别到 location</option>
+                        </select>
+                    </label>
+                    <label>人物筛选
+                        <select id="rf-person"></select>
+                    </label>
+                    <label>FTS 关键词 <input type="text" id="rf-fts" placeholder="比如:故宫 婚礼"></label>
+                </div>
+                <div class="rf-row">
+                    <label>阶段
+                        <select id="rf-stage">
+                            <option value="vision">vision(重跑两次 LLM,每张 ~22s)</option>
+                            <option value="derived">derived(纯规则,秒级)</option>
+                            <option value="faces">faces(quick rematch,秒级)</option>
+                        </select>
+                    </label>
+                    <label>备注 <input type="text" id="rf-note" placeholder="复盘时记得知道为啥跑的"></label>
+                </div>
+                <div class="rf-actions">
+                    <button id="rf-preview-btn">预览匹配</button>
+                    <button id="rf-run-btn" class="primary">开始重跑</button>
+                </div>
+                <div id="rf-preview" class="rf-preview"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== Tab 4: 浏览 ========== -->
+    <section id="browse" class="page">
+        <div id="browse-header" class="browse-header">加载中……</div>
+        <div id="thumb-grid" class="thumb-grid"></div>
+        <div id="photo-detail" class="detail hidden"></div>
+    </section>
+
+    <!-- ========== Tab 5: 问相册(Chat)========== -->
+    <section id="chat" class="page">
+        <p class="hint">用自然语言提问。例：“小明和小张的合影”、“小明去年去过哪些城市”、“打雪仗的照片”、“穿裙子的照片”。</p>
+        <div class="chat-toolbar">
+            <label>模型 <select id="chat-provider"></select></label>
+            <span id="chat-provider-meta" class="hint" style="margin:0"></span>
+        </div>
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form">
+            <input type="text" id="chat-input" placeholder="问点什么..." autocomplete="off">
+            <button type="submit" id="chat-send">发送</button>
+        </form>
+    </section>
+</main>
+
+<!-- 共享 Photo Viewer modal — chat / Browse / 未引用候选区点缩略图都弹这个 -->
+<div id="photo-viewer" class="viewer hidden">
+    <div class="viewer-backdrop"></div>
+    <div class="viewer-content">
+        <img id="viewer-img" title="1024px 预览(非原图),要看 / 下载原图请用下方按钮">
+        <div class="viewer-img-note">↑ 1024px 预览 · 右键保存的是缩略图,真原图请走下方按钮</div>
+        <div class="viewer-meta">
+            <div class="viewer-caption"></div>
+            <div class="viewer-desc"></div>
+        </div>
+        <div class="viewer-actions">
+            <a id="viewer-download" download>下载原图</a>
+            <button id="viewer-detail">完整详情 →</button>
+            <button id="viewer-close">关闭</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+"""query/search.py 和 query/aggregate.py 单元测试。
+
+不依赖 LLM / fastembed:
+  - photo_embeddings 表空 → search_photos 自动只跑 FTS-only 路径
+  - location filter / time filter / persons OR/AND 都纯 SQL
+"""
+from __future__ import annotations
+
+from life_lens.query.search import search_photos
+from life_lens.query.aggregate import places_visited, counts_by_year
+
+
+def test_search_photos_no_query_returns_all(populated_db):
+    """无 query 时返回全部(只过滤 source != seed)。"""
+    r = search_photos(populated_db)
+    assert r["total"] == 5
+    assert len(r["items"]) == 5
+
+
+def test_search_photos_query_matches_description(populated_db):
+    """query='海边' 命中 description 含'海边'的 3 张(p_003, p_005, 还有'夕阳下的海边')。"""
+    r = search_photos(populated_db, query="海边")
+    # trigram FTS 至少能命中 p_003, p_005;p_004 没有"海边"
+    ids = {item["photo_id"] for item in r["items"]}
+    assert "p_003" in ids
+    assert "p_005" in ids
+    assert "p_004" not in ids   # 李丽公园,不应命中海边
+
+
+def test_search_photos_persons_or(populated_db):
+    """persons=['张三'] OR mode 返回所有含张三的 3 张。"""
+    r = search_photos(populated_db, persons=["张三"])
+    ids = {item["photo_id"] for item in r["items"]}
+    assert ids == {"p_001", "p_002", "p_003"}
+
+
+def test_search_photos_persons_and(populated_db):
+    """persons=['张三','李丽'] AND mode 只返回同时含两人的 p_003。"""
+    r = search_photos(populated_db, persons=["张三", "李丽"], persons_mode="AND")
+    ids = {item["photo_id"] for item in r["items"]}
+    assert ids == {"p_003"}
+
+
+def test_search_photos_persons_and_unrecognized(populated_db):
+    """AND 模式遇未识别人名严格返 0(不退化成 OR)。"""
+    r = search_photos(populated_db, persons=["张三", "完全不存在的人"], persons_mode="AND")
+    assert len(r["items"]) == 0
+
+
+def test_search_photos_time_window(populated_db):
+    """time_from 过滤(fixture 都是 2026-01-15,改个未来时间应该 0 结果)。"""
+    r = search_photos(populated_db, time_from="2099-01-01")
+    assert r["total"] == 0
+
+
+def test_search_photos_time_to_day_only_fix(populated_db):
+    """time_to 只到日期(YYYY-MM-DD)时,后端应自动补 T23:59:59 避免字典序漏当天。
+    fixture 照片 captured_at_local = '2026-01-15T12:00:00',
+    传 time_to='2026-01-15' 应该包含它。"""
+    r = search_photos(populated_db, time_to="2026-01-15")
+    assert r["total"] > 0   # 至少有 fixture 5 张
+
+
+def test_places_visited_basic(populated_db):
+    """places_visited 按 place_name 聚合 (公园 2 张 / 海边 2 张 / 城市 1 张)。"""
+    r = places_visited(populated_db)
+    places = {p["formatted_address"]: p["count"] for p in r["places"]}
+    assert places.get("公园") == 2
+    assert places.get("海边") == 2
+    assert places.get("城市") == 1
+
+
+def test_places_visited_persons_and_unrecognized_strict(populated_db):
+    """AND 模式 + 不存在的人 → places 空 + unrecognized_persons 列出来。"""
+    r = places_visited(populated_db, persons=["张三", "完全不存在"], persons_mode="AND")
+    assert r["places"] == []
+    assert "完全不存在" in r.get("unrecognized_persons", [])
+
+
+def test_counts_by_year(populated_db):
+    """counts_by_year 按年聚合。fixture 全是 2026。"""
+    r = counts_by_year(populated_db)
+    years = {row["year"]: row["count"] for row in r["by_year"]}
+    assert years.get(2026) == 5
