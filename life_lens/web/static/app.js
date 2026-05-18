@@ -533,7 +533,7 @@ async function refreshEmbeddingsBox() {
             <div class="progress-bar"><div class="progress-bar-fill" style="width:${rPct}%"></div></div>
         `;
     } else if (reb.finished_at && !reb.error) {
-        progressHTML = `<div class="hint" style="margin-top:4px;color:#16a34a">✓ 上次重建完成于 ${reb.finished_at}</div>`;
+        progressHTML = `<div class="hint" style="margin-top:4px;color:#16a34a">✓ 上次重建完成于 ${formatLocalTime(reb.finished_at)}</div>`;
     } else if (reb.error) {
         progressHTML = `<div class="hint" style="margin-top:4px;color:#b91c1c">✗ ${escapeHtml(reb.error)}</div>`;
     }
@@ -589,6 +589,23 @@ function escapeHtml(s) {
     return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// 后端 timestamp 多为 UTC ISO(如 "2026-05-18T15:09:09+00:00"),前端按浏览器时区格式化显示
+function formatLocalTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+// 照片拍摄时间(captured_at_local,相机原始 wall clock,通常无时区)
+// 不能用 Date 解析(浏览器会按本地时区"假设" + 二次转换会错)— 纯字符串美化:
+// "2024-08-15T19:23:01" → "2024-08-15 19:23",保留秒以上信息只切到分钟
+function formatCapturedAt(s) {
+    if (!s) return '';
+    const m = String(s).match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+    return m ? `${m[1]} ${m[2]}` : s;
+}
+
 
 // 启动:优先恢复上次的 tab(localStorage);没有的话才看 setup status next_step
 (async function init() {
@@ -620,7 +637,7 @@ async function refreshSources() {
     list.innerHTML = '';
     sources.forEach(s => {
         const li = document.createElement('li');
-        li.innerHTML = `<span><b>${s.kind}</b> — ${s.config.path || s.source_id}${s.last_scan_at ? ` · 上次扫描 ${s.last_scan_at}` : ''}</span>`;
+        li.innerHTML = `<span><b>${s.kind}</b> — ${s.config.path || s.source_id}${s.last_scan_at ? ` · 上次扫描 ${formatLocalTime(s.last_scan_at)}` : ''}</span>`;
         const del = document.createElement('button');
         del.className = 'del';
         del.textContent = '删除';
@@ -759,8 +776,8 @@ function renderScanGlobal(s) {
                         <div class="hint" style="margin:4px 0 0">
                             Source: ${srcs}<br>
                             进度: <b>${res.done + res.failed}/${res.total}</b> (${pct}%) · done ${res.done} · failed ${res.failed} · pending <b>${res.pending}</b><br>
-                            时间范围: ${tr.min || '—'} ~ ${tr.max || '—'}${res.scanned_up_to ? ` · 已扫到 <b>${res.scanned_up_to}</b>` : ''}<br>
-                            开始: ${res.started_at || '?'} · ${res.status === 'failed' ? '失败' : '暂停'}: ${res.stopped_at || '?'}
+                            时间范围: ${formatCapturedAt(tr.min) || '—'} ~ ${formatCapturedAt(tr.max) || '—'}${res.scanned_up_to ? ` · 已扫到 <b>${formatCapturedAt(res.scanned_up_to)}</b>` : ''}<br>
+                            开始: ${formatLocalTime(res.started_at) || '?'} · ${res.status === 'failed' ? '失败' : '暂停'}: ${formatLocalTime(res.stopped_at) || '?'}
                             ${res.note ? `<br>备注: ${res.note}` : ''}
                         </div>
                     </div>
@@ -844,8 +861,8 @@ function renderProgressCard(run, mountId = 'progress-card-mount') {
 
         <div class="pc-label">时间进度</div>
         <div class="pc-bar-meta">
-            扫描区间:<b>${tlo || '—'}</b> ~ <b>${thi || '—'}</b><br>
-            ${scanned ? `已扫到拍照时间:<b>${scanned}</b>` : '尚未开始'}
+            扫描区间:<b>${formatCapturedAt(tlo) || '—'}</b> ~ <b>${formatCapturedAt(thi) || '—'}</b><br>
+            ${scanned ? `已扫到拍照时间:<b>${formatCapturedAt(scanned)}</b>` : '尚未开始'}
         </div>
 
         <div class="pc-stats">
@@ -859,7 +876,7 @@ function renderProgressCard(run, mountId = 'progress-card-mount') {
             ${run.current_thumb_url ? `<img src="${run.current_thumb_url}" loading="lazy" onerror="this.style.display='none'">` : ''}
             <div>
                 <div class="pc-current-path">${run.current_path.split('/').pop()}</div>
-                <div class="hint" style="margin:2px 0">${run.current_captured_at || ''}</div>
+                <div class="hint" style="margin:2px 0">${formatCapturedAt(run.current_captured_at)}</div>
                 <div class="hint" style="margin:0;font-size:11px">${run.current_path}</div>
             </div>
         </div>` : ''}
@@ -944,8 +961,8 @@ async function refreshRuns() {
                     <td>${r.total}</td>
                     <td>${r.done}</td>
                     <td>${r.failed}</td>
-                    <td class="ts">${r.started_at || ''}</td>
-                    <td class="ts">${r.finished_at || ''}</td>
+                    <td class="ts">${formatLocalTime(r.started_at)}</td>
+                    <td class="ts">${formatLocalTime(r.finished_at)}</td>
                     <td>${r.note || ''}</td>
                 </tr>
                 <tr class="run-detail-row" data-runid="${r.run_id}"><td colspan="9"><div class="run-detail-mount"></div></td></tr>
@@ -1000,7 +1017,7 @@ async function toggleRunDetail(runId) {
                             <div class="run-failure">
                                 <img src="/api/thumb/${f.photo_id}" loading="lazy" onerror="this.style.display='none'">
                                 <div>
-                                    <div><b>${(f.original_path||'').split('/').pop()}</b> · ${f.captured_at_local || ''}</div>
+                                    <div><b>${(f.original_path||'').split('/').pop()}</b> · ${formatCapturedAt(f.captured_at_local)}</div>
                                     <div class="hint" style="margin:2px 0">${f.original_path || ''}</div>
                                     <div class="hint err">retry=${f.retry_count} · ${escapeHtml(f.last_error || '')}</div>
                                 </div>
@@ -1105,7 +1122,7 @@ async function rfDoPreview() {
         preview.innerHTML = `
             <p><b>匹配 ${r.count} 张</b> · 阶段 ${stage}${stage === 'vision' ? `(预计 ~${Math.round(r.count * 22 / 60)} 分钟)` : ''}</p>
             <div class="rf-samples">
-                ${r.sample.map(s => `<div><img src="${s.thumb_url}" loading="lazy"><div class="hint" style="margin:0">${s.captured_at || ''}</div></div>`).join('')}
+                ${r.sample.map(s => `<div><img src="${s.thumb_url}" loading="lazy"><div class="hint" style="margin:0">${formatCapturedAt(s.captured_at)}</div></div>`).join('')}
             </div>
         `;
         document.getElementById('rf-run-btn').dataset.count = r.count;
@@ -1194,7 +1211,6 @@ async function showDetail(id) {
         </div>` : '';
     d.innerHTML = `
         <img src="/api/thumb/${id}" title="1024px 预览(非原图),要看 / 下载原图请用下方按钮">
-        <div class="detail-img-note">↑ 1024px 预览 · 右键保存的是缩略图,真原图请走下方按钮</div>
         <div class="detail-actions">
             <a href="/api/original/${encodeURIComponent(id)}?download=1" download>下载原图</a>
         </div>
@@ -1240,7 +1256,7 @@ async function openViewer(id) {
     // 异步拉详情填 caption / desc
     try {
         const rec = await api('/photo/' + encodeURIComponent(id));
-        const time = (rec.exif && (rec.exif.captured_at_local || rec.exif.captured_at_utc)) || '(时间未知)';
+        const time = formatCapturedAt((rec.exif && (rec.exif.captured_at_local || rec.exif.captured_at_utc)) || '') || '(时间未知)';
         const place = (rec.derived && rec.derived.location_bucket
                        && (rec.derived.location_bucket.formatted_address
                            || rec.derived.location_bucket.place_name
