@@ -57,6 +57,12 @@ def main(argv=None):
     bak_p.add_argument("--out", type=Path, default=None,
                        help="输出路径,默认 <root>/backups/lens-YYYYMMDD-HHMM.db")
 
+    upd_p = sub.add_parser("update", help="拉最新代码 + 装依赖 + 重启 web server")
+    upd_p.add_argument("--port", type=int, default=7878,
+                       help="重启 web server 的端口(默认 7878)")
+    upd_p.add_argument("--no-restart", action="store_true",
+                       help="只拉代码 / 装依赖,不动正在跑的 server")
+
     args = parser.parse_args(argv)
     root = (args.root or Path.home() / ".life_lens").expanduser().resolve()
     # 让 store.config 跟 --root 走(scan/reprocess 等子命令也会读 config 拿 amap_key / vision endpoint)
@@ -84,6 +90,8 @@ def main(argv=None):
         _cmd_reprocess(root, args.group, args.mode)
     elif cmd == "backup":
         _cmd_backup(root, args.out)
+    elif cmd == "update":
+        _cmd_update(args.port, no_restart=args.no_restart)
     else:
         parser.print_help()
         sys.exit(2)
@@ -337,6 +345,137 @@ def _cmd_status(root: Path, jobs: bool = False):
         print(json.dumps(out, ensure_ascii=False, indent=2))
     finally:
         conn.close()
+
+
+def _cmd_update(port: int, *, no_restart: bool = False):
+    """拉最新代码 + 装依赖 + 重启 web server。
+
+    定位安装目录:本包是 `pip install -e .` 装的,源码就在 site-packages 之外的 git repo 里。
+    `Path(__file__).resolve()` 走到的就是真源码位置(life_lens/cli/main.py),其上两级就是仓库根。
+    """
+    import os
+    import shutil
+    import socket
+    import subprocess
+    import time
+
+    pkg_root = Path(__file__).resolve().parents[2]   # life_lens/cli/main.py → 仓库根
+    if not (pkg_root / ".git").is_dir():
+        print(f"❌ 找不到 git 仓库:{pkg_root}/.git 不存在", file=sys.stderr)
+        print("   `lens update` 只在通过 `pip install -e .` 装的源码仓库里工作。", file=sys.stderr)
+        print("   或者你也可以手动 cd 到源码目录,git pull + pip install -e .", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"📦 仓库: {pkg_root}")
+
+    # --- 拉最新代码 ---
+    print("⬇️  git pull --ff-only ...")
+    r = subprocess.run(
+        ["git", "-C", str(pkg_root), "pull", "--ff-only"],
+        capture_output=True, text=True,
+    )
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    if r.returncode != 0:
+        print("❌ git pull 失败,update 中止。", file=sys.stderr)
+        sys.exit(r.returncode)
+    if "Already up to date" in r.stdout or "已经是最新的" in r.stdout:
+        already_latest = True
+    else:
+        already_latest = False
+
+    # --- 装依赖(只在有更新时跑;pip 自己幂等,跑一次也没事但慢) ---
+    pip = shutil.which("pip") or shutil.which("pip3")
+    if pip:
+        print("📦 pip install -e . ...")
+        subprocess.run([pip, "install", "-e", str(pkg_root), "-q"], check=False)
+    else:
+        print("⚠️  找不到 pip,跳过依赖刷新", file=sys.stderr)
+
+    # --- 重启 ---
+    if no_restart:
+        print("✓ 代码已更新(--no-restart 跳过重启)。")
+        return
+
+    pid = _find_listening_pid(port)
+    if pid is None:
+        print(f"ℹ️  端口 {port} 没人在听,直接启动新 server。")
+    else:
+        print(f"🔪 kill 旧 server pid={pid}(端口 {port})...")
+        try:
+            os.kill(pid, 15)   # SIGTERM
+        except ProcessLookupError:
+            pass
+        # 最多等 5 秒让端口释放
+        for _ in range(10):
+            if _find_listening_pid(port) is None:
+                break
+            time.sleep(0.5)
+        else:
+            print(f"⚠️  pid={pid} 5 秒没退,强 kill(SIGKILL)", file=sys.stderr)
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+            time.sleep(0.5)
+
+    # 起新 server(detach,父进程退出后继续跑)
+    lens_bin = shutil.which("lens") or "lens"
+    log_path = "/tmp/life-lens-update.log"
+    print(f"🚀 启动新 server → lens serve --port {port}(日志 {log_path})")
+    with open(log_path, "ab") as logf:
+        subprocess.Popen(
+            [lens_bin, "serve", "--port", str(port), "--no-browser"],
+            stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
+            start_new_session=True,   # 脱离父 shell
+        )
+
+    # 等端口起来
+    for i in range(30):
+        if _port_listening(port):
+            print(f"✓ 新 server 已起 → http://127.0.0.1:{port}")
+            if already_latest:
+                print("   (代码本来就是最新,但 server 已用最新依赖重启)")
+            return
+        time.sleep(1)
+    print(f"⚠️  30 秒内端口 {port} 还没就绪,看日志 {log_path}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _find_listening_pid(port: int):
+    """找正在监听 port 的进程 PID。返回 None 表示没人在听。
+
+    用 lsof:macOS / Linux 都有,POSIX 通用。`lsof -nP -iTCP:7878 -sTCP:LISTEN -t` 直接出 PID。
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    out = (r.stdout or "").strip()
+    if not out:
+        return None
+    # 多 PID 取第一个就行(一般只有一个 lens 进程在这个端口)
+    try:
+        return int(out.split("\n")[0])
+    except ValueError:
+        return None
+
+
+def _port_listening(port: int) -> bool:
+    """端口是否有人在监听(无论 TCP 三次握手有没有完成,有 LISTEN 就 True)。"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.3)
+    try:
+        s.connect(("127.0.0.1", port))
+        s.close()
+        return True
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        return False
 
 
 if __name__ == "__main__":

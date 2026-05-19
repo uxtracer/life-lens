@@ -9,7 +9,7 @@ Life Lens 在**本地**用视觉模型把每张照片读一遍，提取出场景
 - "我今年去过哪些城市？"
 - "海边的照片"
 - "去年冬天和家人吃火锅的那次"
-- "穿红衣服的小朋友"
+- "穿红衣服的子涵"
 
 它会理解、检索、把对应的照片找出来给你看。
 
@@ -146,7 +146,22 @@ lens serve --port 7878        # 指定端口
 lens scan <path>              # 命令行扫描(也可以在 web GUI 里扫)
 lens status --jobs            # 看任务状态、最近 5 个 Run、失败原因
 lens backup                   # WAL-safe 数据库快照
+lens update                   # 升级到最新版(拉代码 + 装依赖 + 重启 server)
 ```
+
+### 升级到新版
+
+二选一:
+
+```bash
+# A) 已装好的环境里:一行搞定
+lens update
+
+# B) 直接重跑安装脚本(等价 A,但会先 git pull 整个仓库)
+curl -fsSL https://raw.githubusercontent.com/uxtracer/life-lens/main/install.sh | bash
+```
+
+两条命令都会:`git pull` → `pip install -e .` → kill 旧 server → 起新 server,跑完浏览器刷新就是新版。db 和 config(`~/.life_lens/`)不动。
 
 ### 多账号 / 多 root 并行
 

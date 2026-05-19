@@ -81,23 +81,31 @@ say "修复 pillow 版本 + 装 socks 支持..."
 pip install 'pillow>=11.1' 'httpx[socks]' -q
 ok "依赖安装完成"
 
-# ---- 4. 启动 ----
+# ---- 4. 启动(端口被占就先 kill,确保跑的是刚刚装好的新代码)----
 say "启动 lens (端口 $PORT)..."
-# 用户已经有同端口跑着?让他自己处理
-if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q 200; then
-    warn "端口 $PORT 已经有服务在跑,跳过启动"
-    LAUNCHED=0
-else
-    nohup lens serve --port "$PORT" > /tmp/life-lens-install.log 2>&1 &
-    LAUNCHED=1
-    # 首次启动较慢(InsightFace bootstrap),最多等 30 秒
-    for _ in $(seq 1 30); do
-        if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q 200; then
-            break
-        fi
-        sleep 1
+OLD_PID=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
+if [ -n "$OLD_PID" ]; then
+    warn "端口 $PORT 已被 pid=$OLD_PID 占用(可能是上一版的 lens server),先 kill 再启动"
+    kill "$OLD_PID" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+        if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then break; fi
+        sleep 0.5
     done
+    if lsof -nP -iTCP:$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+        warn "5 秒没退,SIGKILL"
+        kill -9 "$OLD_PID" 2>/dev/null || true
+        sleep 0.5
+    fi
 fi
+nohup lens serve --port "$PORT" > /tmp/life-lens-install.log 2>&1 &
+LAUNCHED=1
+# 首次启动较慢(InsightFace bootstrap),最多等 30 秒
+for _ in $(seq 1 30); do
+    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q 200; then
+        break
+    fi
+    sleep 1
+done
 
 if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q 200; then
     ok "服务运行中 → http://127.0.0.1:$PORT"
@@ -121,3 +129,7 @@ echo "    - 填对话模型 API key (推荐 DeepSeek)"
 echo ""
 say "下次手动启动:"
 echo "    cd $INSTALL_DIR && source .venv_lens/bin/activate && lens serve"
+echo ""
+say "以后升级到新版,二选一:"
+echo "    A) 在已装好的 venv 里:lens update         # 一行搞定,拉代码 + 装依赖 + kill 旧 server + 起新的"
+echo "    B) 重跑本脚本:curl -fsSL https://raw.githubusercontent.com/uxtracer/life-lens/main/install.sh | bash"

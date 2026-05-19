@@ -163,6 +163,15 @@
 
 **Phase 6 未做**:`scripts/build_embeddings.py` 仍保留(纯 CLI 场景 / debug);未来考虑 schema_version bump + 启动时检测 `total_with_vision - total_indexed` > 阈值 → banner 提示"语义索引落后,点这里补建"。
 
+4. **`lens update` 子命令 + install.sh 重跑也是"升级"(2026-05-19)**
+   - 之前 install.sh 只在端口空闲时启动,**端口已占就跳过** → 重跑等于 git pull + pip install,但老进程继续跑老代码,用户察觉不到没升级
+   - 现在两条路:
+     - **`lens update`**(`cli/main.py::_cmd_update`):git pull --ff-only + pip install -e . + `lsof -ti :7878` 找现役 server + SIGTERM(5s 后 SIGKILL 兜底)+ `Popen([lens_bin, 'serve', '--port', N, '--no-browser'], start_new_session=True)` detach 启动 + 30 秒 poll 端口
+     - **重跑 install.sh**:同样改成"端口被占先 kill 再启动"
+   - `pkg_root = Path(__file__).resolve().parents[2]` 定位真源码目录(`pip install -e` 装的 entry point 走的是 `~/life-lens/life_lens/cli/main.py`)。`(pkg_root / ".git").is_dir()` 不在就拒(防私有 monorepo 子目录误触发 — 私有 monorepo 的 .git 在更上一层,life_lens 子目录本身没 .git)
+   - 端口判定改成 **`lsof -nP -iTCP:$PORT -sTCP:LISTEN -t`**(macOS / Linux 都有,POSIX 通用),不依赖 HTTP 200 探活(老版可能根本不响应根路径)
+   - README 加"升级到新版"章节,二选一(`lens update` 或重跑 curl 安装脚本)。两条都做同样的事:git pull + pip install + kill 旧 + 起新
+
 ### Phase 5 改造(2026-05,开源发布 — 已完成 ✅)
 
 1. **全文脱敏 + 开发纪律** — 真实人名 → 占位符(张三/小明/王女士/李四/赵阿姨/小华/李丽),公司/园区名 → "某园区",路径硬编码 → `Path.home()` / env override。CLAUDE.md 末尾"不要做的事"加规则:今后代码 / prompt / 文档教训禁用真名 + 真实小景点(公共景区/地标可保留),**源头治理优先**,publish.sh grep 只是 last line of defense。
