@@ -140,14 +140,26 @@ curl -fsSL https://raw.githubusercontent.com/uxtracer/life-lens/main/install.sh 
 
 ### 命令行
 
+`lens` 命令装在虚拟环境里,用之前先进安装目录激活 venv(install.sh 默认装到 `~/life-lens/`):
+
 ```bash
-lens                          # 默认启动 web GUI
+cd ~/life-lens                # install.sh 默认目录(LIFE_LENS_HOME 可改)
+source .venv_lens/bin/activate
+```
+
+激活后:
+
+```bash
+lens                          # 默认启动 web GUI + 自动开浏览器
+lens serve --no-browser       # 只起服务,不开浏览器
 lens serve --port 7878        # 指定端口
 lens scan <path>              # 命令行扫描(也可以在 web GUI 里扫)
 lens status --jobs            # 看任务状态、最近 5 个 Run、失败原因
 lens backup                   # WAL-safe 数据库快照
 lens update                   # 升级到最新版(拉代码 + 装依赖 + 重启 server)
 ```
+
+不想激活 venv 也可以直接用全路径:`~/life-lens/.venv_lens/bin/lens serve`。
 
 ### 升级到新版
 
