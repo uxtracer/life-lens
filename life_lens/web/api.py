@@ -105,10 +105,15 @@ def add_source(request: Request, body: dict = Body(...)):
 
 
 @router.post("/sources/pick-folder")
-def pick_folder():
+def pick_folder(mode: str = "folder"):
     """打开本地原生文件夹选择对话框,返回绝对路径。
 
-    macOS:走 osascript 'choose folder'(用户机器是本地服务器,弹窗在同一台机器上)。
+    mode:
+      - "folder"(默认): 选普通文件夹。注意 macOS `choose folder` 不让选 .photoslibrary
+        这类 package(系统行为,显示为灰色)
+      - "photos_library": 选 Apple Photos 图库 (.photoslibrary)。走 `choose file` + UTI
+        过滤(`com.apple.photos.library`),把 package 当文件来选
+
     Linux:有 zenity 就用,没有就返 501,让用户手填。
     Windows:暂不支持(未测试)。
     """
@@ -116,10 +121,21 @@ def pick_folder():
     import subprocess
     sys = platform.system()
     if sys == "Darwin":
+        if mode == "photos_library":
+            # .photoslibrary 是 macOS package(包),`choose folder` 不让选(灰色)。
+            # `choose file` 默认把 package 当文件处理(showing package contents=false),
+            # 不加 of type 过滤(新版 macOS 对 UTI 字符串支持不一致),让用户在
+            # Pictures 目录里直接选 .photoslibrary。后端验路径后缀兜底。
+            script = (
+                'POSIX path of (choose file with prompt '
+                '"选择 Apple Photos 图库 (.photoslibrary):" '
+                'default location (path to pictures folder))'
+            )
+        else:
+            script = 'POSIX path of (choose folder with prompt "选择要扫描的照片目录:")'
         try:
             r = subprocess.run(
-                ["osascript", "-e",
-                 'POSIX path of (choose folder with prompt "选择要扫描的照片目录:")'],
+                ["osascript", "-e", script],
                 capture_output=True, text=True, timeout=300,
             )
             if r.returncode != 0:
@@ -128,7 +144,12 @@ def pick_folder():
                 if "User canceled" in err or "-128" in err or not err:
                     return {"path": None, "cancelled": True}
                 raise HTTPException(500, f"folder picker failed: {err}")
-            return {"path": r.stdout.strip(), "cancelled": False}
+            # 剥尾斜杠:choose file 选 .photoslibrary 包返回带 / 的 POSIX 路径,
+            # 前端按后缀判 kind 会误走 filesystem,这里统一在出口剥掉
+            path = (r.stdout.strip().rstrip("/")) or "/"
+            if mode == "photos_library" and not path.endswith(".photoslibrary"):
+                raise HTTPException(400, f"必须选 .photoslibrary 结尾的 Apple Photos 图库,你选的是:{path}")
+            return {"path": path, "cancelled": False}
         except subprocess.TimeoutExpired:
             return {"path": None, "cancelled": True}
     elif sys == "Linux":

@@ -32,6 +32,24 @@ def list_sources(conn: sqlite3.Connection) -> list[dict]:
 
 
 def delete_source(conn: sqlite3.Connection, source_id: str) -> None:
+    """删 source + 级联清理孤儿 scan_runs / jobs。
+
+    保留 status='done' 的历史 run(审计 / photos 表里仍有那次扫到的照片);
+    只清理 source_ids 完全等于 [source_id] 且非 done 状态的 run,以及它们的 jobs。
+    跨 source 的 run(source_ids 含多个)不动。
+    """
+    # 找出所有 source_ids 只含此 source 且非 done 的 run
+    orphan_runs = conn.execute(
+        """
+        SELECT run_id FROM scan_runs
+        WHERE source_ids = ? AND status != 'done'
+        """,
+        (json.dumps([source_id], ensure_ascii=False),),
+    ).fetchall()
+    orphan_ids = [r["run_id"] for r in orphan_runs]
+    for rid in orphan_ids:
+        conn.execute("DELETE FROM jobs WHERE run_id = ?", (rid,))
+        conn.execute("DELETE FROM scan_runs WHERE run_id = ?", (rid,))
     conn.execute("DELETE FROM sources WHERE source_id = ?", (source_id,))
 
 

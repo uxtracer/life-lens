@@ -226,7 +226,51 @@ WHERE source != 'seed' AND vision IS NOT NULL
        OR json_extract(vision, '$.tags') LIKE '%长城%');
 ```
 
-### 4. 某段时间在某城市的照片
+### 4. 语义向量检索(自然语言模糊查询)
+
+`photo_embeddings` 里每张已扫照片有一条 bge-small-zh-v1.5 向量。Phase 6 起,主扫描 + reprocess vision 时 inline 写入,**新照片自动有 embedding**(以前要手动跑 `scripts/build_embeddings.py`)。
+
+适合 "看上去像沙滩日落的照片" 这种**字面对不上但语义近**的查询。FTS 不会命中"连衣裙" 跟 "裙子" 的关系,语义会。
+
+```python
+import numpy as np, sqlite3
+from fastembed import TextEmbedding
+
+conn = sqlite3.connect('lens.db'); conn.row_factory = sqlite3.Row
+
+# 加载全库向量(15w 张 ~300MB,brute-force 余弦在 30w 张内完全够)
+rows = conn.execute(
+    "SELECT photo_id, vec FROM photo_embeddings WHERE model='bge-small-zh-v1.5'"
+).fetchall()
+ids = [r['photo_id'] for r in rows]
+mat = np.stack([np.frombuffer(r['vec'], np.float32) for r in rows])  # (N, 512) 已 L2 normalized
+
+# 用同一个模型 embed query(必须同模型,不同 embedding space 不能比)
+embedder = TextEmbedding(model_name='BAAI/bge-small-zh-v1.5')
+q_vec = next(embedder.query_embed(['海边日落的合影'])); q_vec = q_vec / np.linalg.norm(q_vec)
+
+scores = mat @ q_vec
+top_k = np.argsort(-scores)[:20]
+for i in top_k:
+    print(ids[i], f"{scores[i]:.3f}")
+```
+
+**short-query vs long-doc 弱点**:bge 把 200 字 description 压成 512 维,短 query("裙子" 2 字)跟长 doc 余弦只 ~0.40,容易被稀释。两个对策:
+1. **query expansion**:扩词成 3-5 个具体物品(`"裙子" → ["连衣裙","长裙","短裙"]`),分别 embed 取 max,再 RRF
+2. **hybrid with FTS**:FTS 字面 `LIKE %连衣裙%` 走 sparse 路径精确命中,语义走 dense 路径覆盖近义。`life_lens/query/semantic.py::rrf_merge_multi` 是参考实现
+
+### 5. 怎么选 FTS / 语义 / hybrid?
+
+| 查询形态 | 用什么 | 例子 |
+|---|---|---|
+| 精确关键词、地名、人名(≥ 3 字) | FTS5 MATCH | "阿那亚金山岭" / "外滩夜景" |
+| 短词 / 单字 | LIKE on description+scene+tags | "猫" / "长城" / "雪" |
+| 描述性、模糊、近义 | 语义向量(bge) | "看上去像家庭聚餐" / "孩子在草地上玩" |
+| 用户自然语言提问(生产) | hybrid(FTS + 语义 RRF) | "夏天我和家人在海边" |
+
+**生产建议**:hybrid 永远是最稳的(dense 解语义,sparse 解字面),实现见 `life_lens/query/search.py::search_photos`。独立读 db 做一次性分析时,根据问题挑一种就够。
+
+### 6. 某段时间在某城市的照片
 
 ```sql
 SELECT photo_id, json_extract(derived, '$.location_bucket.place_name') AS place
@@ -238,7 +282,7 @@ WHERE source != 'seed' AND vision IS NOT NULL
        OR json_extract(derived, '$.location_bucket.province') LIKE '%上海%');
 ```
 
-### 5. 一个人单独的自拍(无其他人脸)
+### 7. 一个人单独的自拍(无其他人脸)
 
 ```sql
 SELECT photo_id, json_extract(vision, '$.description')
@@ -252,7 +296,7 @@ WHERE source != 'seed' AND vision IS NOT NULL
   );
 ```
 
-### 6. 按年统计
+### 8. 按年统计
 
 ```sql
 SELECT json_extract(derived, '$.time_bucket.year') AS year, COUNT(*)
@@ -414,6 +458,9 @@ snapshot 是 self-contained 普通 SQLite 文件,拷哪都行。
 - Phase 4(2026-05)语义向量检索:
   - 新表 **photo_embeddings**(bge-small-zh-v1.5,512 维 float32 BLOB)— 见上面表结构
   - 用户跑的 lens server `search_photos` 默认 hybrid(FTS + sem + RRF),你独立读 db 时各自取用即可
+- Phase 6(2026-05)inline 化:
+  - 主扫描 + reprocess vision 每张顺手 embed + 写 `photo_embeddings`,新照片自动有向量,无需手动跑 `scripts/build_embeddings.py`
+  - 老 db 可能有 `photos.vision IS NOT NULL` 但 `photo_embeddings` 缺行的存量,Web 端"配置 → 存储"卡片有"补建缺失 / 全量重建"兜底
 - chat 历史日志:`~/.life_lens/chat_log/YYYY-MM-DD.jsonl`(每行一个 JSON,字段 question/plan/result/answer/refs/error)
 - 字段语义可能演进。生产前查 `photos.schema_version` 和 `meta.group_versions` 确认版本一致
 

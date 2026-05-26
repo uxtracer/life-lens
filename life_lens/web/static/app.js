@@ -678,7 +678,9 @@ function renderScanSourceList(sources) {
 
 document.getElementById('add-source-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const path = document.getElementById('source-path').value.trim();
+    // 去掉尾斜杠:macOS choose file 选 .photoslibrary 包会返回带 / 的路径,
+    // 不剥的话 endsWith('.photoslibrary') 误判成 false → 错走 filesystem(钻进包内部)
+    const path = document.getElementById('source-path').value.trim().replace(/\/+$/, '');
     // .photoslibrary 结尾 → Apple Photos kind;否则 filesystem
     const kind = path.endsWith('.photoslibrary') ? 'photos_library' : 'filesystem';
     try {
@@ -695,11 +697,11 @@ document.getElementById('add-source-form').addEventListener('submit', async (e) 
 });
 
 // 文件夹选择器(macOS:走后端 osascript 弹原生对话框)
-document.getElementById('pick-folder-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('pick-folder-btn');
+async function _pickFolder(mode, btn) {
     btn.disabled = true;   // 不改文字,但 disabled 给 CSS 视觉反馈
     try {
-        const r = await api('/sources/pick-folder', { method: 'POST' });
+        const url = mode ? `/sources/pick-folder?mode=${encodeURIComponent(mode)}` : '/sources/pick-folder';
+        const r = await api(url, { method: 'POST' });
         if (r.cancelled) return;
         if (r.path) document.getElementById('source-path').value = r.path;
     } catch (err) {
@@ -708,7 +710,9 @@ document.getElementById('pick-folder-btn').addEventListener('click', async () =>
         btn.disabled = false;
         btn.blur();
     }
-});
+}
+document.getElementById('pick-folder-btn').addEventListener('click', (e) => _pickFolder('folder', e.currentTarget));
+document.getElementById('pick-photoslib-btn').addEventListener('click', (e) => _pickFolder('photos_library', e.currentTarget));
 
 // ---- Scan (v2:db-driven + 时间维度) ----
 let _scanPollTimer = null;
