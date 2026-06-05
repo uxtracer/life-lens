@@ -80,8 +80,39 @@ def populated_db(empty_db: sqlite3.Connection) -> sqlite3.Connection:
     return conn
 
 
-def _fake_photo(pid: str, *, names: list, scene: str, desc: str) -> dict:
-    """构造一个完整 6-group photo record(无 vision 真值,仅测试用)。"""
+@pytest.fixture
+def favorite_db(empty_db: sqlite3.Connection) -> sqlite3.Connection:
+    """4 张照片,其中 2 张收藏(derived.favorite=1)→ 测 favorite 生成列过滤。
+
+    favorite_only 走 `photos.favorite` 生成列,不依赖 FTS,故只 upsert_photo 即可。
+    """
+    conn = empty_db
+    photos = [
+        _fake_photo("p_f1", names=["张三"], scene="公园", desc="张三在公园", favorite=1),
+        _fake_photo("p_f2", names=["张三"], scene="城市", desc="张三在城市", favorite=0),
+        _fake_photo("p_f3", names=["李丽"], scene="海边", desc="李丽在海边", favorite=1),
+        _fake_photo("p_f4", names=[],       scene="公园", desc="无人风景",   favorite=0),
+    ]
+    for rec in photos:
+        repo.upsert_photo(conn, rec)
+        for p in rec["people"]["persons"]:
+            cid = p["cluster_id"]
+            conn.execute(
+                "INSERT INTO faces(face_id, photo_id, cluster_id, embedding, bbox, created_at) "
+                "VALUES (?, ?, ?, NULL, NULL, ?)",
+                (f"f_{rec['identity']['photo_id']}_{cid}", rec["identity"]["photo_id"], cid,
+                 datetime.now().isoformat()),
+            )
+            if p.get("name"):
+                conn.execute(
+                    "INSERT OR REPLACE INTO persons(cluster_id, name, updated_at) VALUES (?, ?, ?)",
+                    (cid, p["name"], datetime.now().isoformat()),
+                )
+    return conn
+
+
+def _fake_photo(pid: str, *, names: list, scene: str, desc: str, favorite: int = 0) -> dict:
+    """构造一个完整 6-group photo record(无 vision 真值,仅测试用)。favorite=1 标收藏。"""
     persons = [
         {"cluster_id": f"seed_{n.replace(' ', '_')}", "name": n, "action": "站立"}
         for n in names
@@ -129,6 +160,7 @@ def _fake_photo(pid: str, *, names: list, scene: str, desc: str) -> dict:
                                 "place_name": scene, "is_home": False, "is_travel": False},
             "photo_type": "daily",
             "is_keeper": True,
+            "favorite": favorite,
         },
         "meta": {
             "processed_at": "2026-01-15T05:00:00Z",

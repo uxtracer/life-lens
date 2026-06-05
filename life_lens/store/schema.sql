@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS photos (
     captured_at_utc TEXT GENERATED ALWAYS AS (json_extract(exif, '$.captured_at_utc')) STORED,
     media_type      TEXT GENERATED ALWAYS AS (json_extract(vision, '$.media_type')) STORED,
     is_keeper       INTEGER GENERATED ALWAYS AS (json_extract(derived, '$.is_keeper')) STORED,
+    favorite        INTEGER GENERATED ALWAYS AS (json_extract(derived, '$.favorite')) STORED,
 
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
@@ -30,6 +31,8 @@ CREATE TABLE IF NOT EXISTS photos (
 CREATE INDEX IF NOT EXISTS idx_photos_captured ON photos(captured_at_utc);
 CREATE INDEX IF NOT EXISTS idx_photos_source   ON photos(source);
 CREATE INDEX IF NOT EXISTS idx_photos_media    ON photos(media_type);
+-- idx_photos_favorite 由 db.py::_migrate_columns 建(老库 favorite 列是 ALTER 后加的,
+-- executescript 阶段还不存在,放这里会"no such column";_migrate_columns 在加列后建)
 
 -- 扫描状态机(老库通过 db.py::init_schema 的 ALTER ADD COLUMN 平滑迁移)
 CREATE TABLE IF NOT EXISTS jobs (
@@ -69,6 +72,18 @@ CREATE TABLE IF NOT EXISTS scan_runs (
 
 CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scan_runs_status  ON scan_runs(status);
+
+-- 相册名解析缓存:相册名 → 城市 + 具体地点 + 事件关键词(本地 LLM 解析,见 scanner/album.py)
+-- 相册名是高度重复小集合,按 album_name 缓存,unique 名字只调一次本地 Ollama
+CREATE TABLE IF NOT EXISTS album_parse_cache (
+    album_name  TEXT PRIMARY KEY,
+    country     TEXT,                -- 国外国家名(日本/美国);国内或无法判断 null
+    city        TEXT,
+    province    TEXT,
+    place       TEXT,                -- 具体景点/地标(颐和园/外滩);只到城市颗粒度时 null
+    tags_json   TEXT,                -- JSON list[str]
+    parsed_at   TEXT
+);
 
 -- 高德 reverse-geocoding 每日配额追踪(Asia/Shanghai 时区)
 CREATE TABLE IF NOT EXISTS amap_quota (

@@ -14,7 +14,8 @@
 # 公开仓库: https://github.com/uxtracer/life-lens
 set -euo pipefail
 
-SRC="$HOME/claude/life_lens"
+# SRC 从脚本自身位置推导(私有仓挪目录不会断);DST 固定公开镜像位置
+SRC="$(cd "$(dirname "$0")/.." && pwd)"
 DST="$HOME/claude/life_lens-public"
 
 SKIP_TESTS=0

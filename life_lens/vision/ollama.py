@@ -79,10 +79,11 @@ def health_check(
         data = r.json()
         models = [m.get("name", "") for m in (data.get("models") or [])]
         if expect_model:
-            # qwen3-vl:8b-instruct 在 /api/tags 里可能写作 qwen3-vl:8b-instruct 或 :8b
-            hit = any(m == expect_model or m.startswith(expect_model.split(":")[0]) for m in models)
+            # 精确匹配 — 不要前缀容错。qwen3-vl:8b 是 thinking 变体,跟 :8b-instruct 不是
+            # 同一个模型(format=json 下吐空 → 扫描卡第一张),前缀匹配会把它误判成"已就位"。
+            hit = expect_model in models
             if not hit:
-                return False, f"Ollama 在线,但未找到模型 {expect_model}(已有: {models[:5]})"
+                return False, f"Ollama 在线,但未找到模型 {expect_model}(已有: {models[:5]})。请 `ollama pull {expect_model}`"
         return True, f"Ollama OK,{len(models)} 个本地模型"
     except requests.exceptions.RequestException as e:
         return False, f"Ollama 不通 ({type(e).__name__}: {e})"

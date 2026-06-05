@@ -110,8 +110,11 @@ def list_photos(
     limit: int = 100,
     offset: int = 0,
     order_by: str = "captured",
+    favorite_only: bool = False,
 ) -> list[dict]:
     """列出已处理完成的生活记录照片(排除种子图 + 排除 vision 未生成的 placeholder 行)。
+
+    favorite_only: True → 只列 Apple 收藏(derived.favorite=1 的生成列)。
 
     order_by:
       - 'captured'(默认):按拍照时间倒序。fallback:iPhone EXIF 经常没 OffsetTimeOriginal
@@ -129,9 +132,10 @@ def list_photos(
             "                  json_extract(exif, '$.captured_at_local')) DESC NULLS LAST, "
             "         photo_id"
         )
+    fav_sql = " AND favorite = 1" if favorite_only else ""
     rows = conn.execute(
         f"SELECT * FROM photos "
-        f"WHERE source != 'seed' AND vision IS NOT NULL "
+        f"WHERE source != 'seed' AND vision IS NOT NULL{fav_sql} "
         f"{order_sql} "
         f"LIMIT ? OFFSET ?",
         (limit, offset),
@@ -139,10 +143,11 @@ def list_photos(
     return [_row_to_record(r) for r in rows]
 
 
-def count_photos(conn: sqlite3.Connection) -> int:
+def count_photos(conn: sqlite3.Connection, favorite_only: bool = False) -> int:
     """已处理完成的生活记录照片总数(排除种子图 + placeholder 行)。"""
+    fav_sql = " AND favorite = 1" if favorite_only else ""
     return conn.execute(
-        "SELECT COUNT(*) FROM photos WHERE source != 'seed' AND vision IS NOT NULL"
+        f"SELECT COUNT(*) FROM photos WHERE source != 'seed' AND vision IS NOT NULL{fav_sql}"
     ).fetchone()[0]
 
 

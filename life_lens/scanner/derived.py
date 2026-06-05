@@ -23,11 +23,14 @@ def compute(record: dict, conn: Optional[sqlite3.Connection] = None) -> dict:
     """计算 derived group。conn 用于 geocode 缓存(可选,但强烈推荐传)。"""
     exif = record.get("exif") or {}
     vision = record.get("vision") or {}
+    ss = (record.get("meta") or {}).get("source_signals") or {}
     return {
         "time_bucket":     _time_bucket(exif),
         "location_bucket": _location_bucket(exif, record.get("meta", {}), conn),
         "photo_type":      _photo_type(vision),
         "is_keeper":       _is_keeper(vision),
+        # Apple 收藏镜像到 derived,供 favorite 生成列/查询用(铁律:可查字段进 derived)
+        "favorite":        1 if ss.get("favorite") else 0,
     }
 
 
@@ -59,10 +62,34 @@ def _time_bucket(exif: dict) -> Optional[dict]:
 
 
 def _location_bucket(exif: dict, meta: dict, conn: Optional[sqlite3.Connection] = None) -> Optional[dict]:
-    """优先用 GPS 调 reverse geocoding(高德),fallback 到 Apple 透传。"""
-    place_apple = (meta.get("source_signals") or {}).get("place_apple")
+    """优先级:GPS reverse(高德)> Apple place 透传 > album 名推断(无 GPS 老照片兜底)。
+
+    album 兜底只在 GPS/Apple 都拿不到城市时填,city/place 走相册名解析,
+    place_name / formatted_address 跟 GPS 路径同格式(复用 amap._build_formatted_address)。
+    相册名 ≠ 精确拍摄地,只到城市/景点颗粒度;绝不覆盖真实地点。见 scanner/album.py。
+    """
+    ss = meta.get("source_signals") or {}
+    place_apple = ss.get("place_apple")
+    albums = ss.get("albums") or []
     gps = exif.get("gps")
-    if not gps and not place_apple:
+
+    # album 国家/城市/景点兜底(仅本地缓存/LLM,需要 conn)
+    album_country = None
+    album_city = None
+    album_province = None
+    album_place = None
+    if conn is not None and albums:
+        try:
+            from . import album as album_mod
+            sig = album_mod.signals_for_albums(albums, conn)
+            album_country = sig.get("country")
+            album_city = sig.get("city")
+            album_province = sig.get("province")
+            album_place = sig.get("place")
+        except Exception as e:
+            log.warning("album signals failed: %s", e)
+
+    if not gps and not place_apple and not album_city and not album_country:
         return None
 
     bucket = {
@@ -92,6 +119,21 @@ def _location_bucket(exif: dict, meta: dict, conn: Optional[sqlite3.Connection] 
                 bucket[k] = parsed.get(k)
             # place_name 首选 AOI > POI > Apple 透传
             bucket["place_name"] = parsed.get("place_name") or place_apple
+
+    # album 兜底:GPS reverse 没拿到地点时,用相册名推断的国家/城市/景点填。
+    if not bucket["country"] and album_country:
+        bucket["country"] = album_country
+    if not bucket["city"] and album_city:
+        bucket["city"] = album_city
+        if album_province and not bucket["province"]:
+            bucket["province"] = album_province
+        if album_place:
+            bucket["poi_name"] = album_place
+        # place_name 只放真 POI/AOI(跟 GPS 路径一致),只有城市时留空,不拿城市名顶替
+        bucket["place_name"] = bucket["poi_name"] or bucket["aoi_name"]
+        from ..geocode.amap import _build_formatted_address
+        bucket["formatted_address"] = _build_formatted_address(bucket)
+
     return bucket
 
 

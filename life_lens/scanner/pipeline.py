@@ -197,6 +197,15 @@ def process_one(
         except Exception as e:
             record_error(rec, "vision", f"{type(e).__name__}: {e}")
 
+    # ---- album 事件关键词合并进 vision.tags(派生数据写进 vision,铁律例外见 CLAUDE.md)----
+    try:
+        albums = (rec["meta"].get("source_signals") or {}).get("albums") or []
+        if rec.get("vision") and albums and db_conn is not None:
+            from . import album as album_mod
+            album_mod.merge_album_tags(rec["vision"], albums, db_conn)
+    except Exception as e:
+        record_error(rec, "album_tags", f"{type(e).__name__}: {e}")
+
     # ---- people(persons[] 含 cluster_id + 实时 resolved name + LLM 给的 action) ----
     persons: list[dict] = []
     for (idx, name), cid in zip(face_items_for_vision, face_cluster_ids):

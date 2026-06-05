@@ -19,7 +19,7 @@
 - **Phase 3** ✅:Apple Photos source + iCloud 备份脚本 + cities 地图;**未做**:sidecar JSON 导出、MCP server(Py ≥ 3.10)、视频
 - **Phase 4** ✅:语义向量(bge-small-zh + fastembed) + hybrid + RRF + LLM query expansion + chat jsonl 日志
 - **Phase 5** ✅:开源发布(脱敏 + db schema_version 自动备份 + A 层 pytest + publish.sh + 5-tab UI + RESTful 统一砍 claude-p + install.sh 一行 + config 跟 `--root`)
-- **Phase 6** 🟢:语义索引 inline 化 + Web 端补建/全量重建兜底 + `lens update` 子命令 + install.sh 端口占用先 kill 再启
+- **Phase 6** 🟢:语义索引 inline 化 + Web 端补建/全量重建兜底 + `lens update` 子命令 + install.sh 端口占用先 kill 再启 + **album 信号**(本地 LLM 解析相册名 → 无 GPS 老照片补城市 + 事件关键词进 vision.tags)
 
 ## 推荐工作流(重要)
 
@@ -38,6 +38,8 @@ GUI 流:配置 → 面孔(添加种子) → 扫描 → 浏览。
 
 **任何新分类 / 枚举 / 桶化字段一律放 `derived/`。不要让 LLM 多产字段**。LLM 只产原始素材(description / scene / objects / tags / ocr_text / mood + actions)。
 
+**有意例外:album 事件关键词写进 `vision.tags`**(`scanner/album.py::merge_album_tags`)。理由:`vision.tags` 本就同时喂 FTS `tags` 列 + embedding source_text,写进去**自动可搜、索引侧零改动**;放 derived 还得给 FTS/embedding 再开一路。代价是 vision 不再是纯 LLM 死字符串 —— 用**幂等重注**化解:扫描产 vision 后、每次 `reprocess_vision_for` 后都重新 merge(dedup),所以重跑 vision 不会把 album tag 冲掉。**别当 bug 改回 derived。**
+
 ### LLM 不写 SQL,不操作连接
 
 Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`;Round 2 流式回答 + `[photo:xxx]`。LLM 只填白名单字段(`query / time_from / time_to / persons / location / persons_mode / query_expansions`)。任何"让 LLM 直接出 SQL"或"工具开放任意字段"的诱惑都先拒掉。
@@ -54,7 +56,7 @@ Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`
 
 ## 技术栈硬约束
 
-- **Python 3.9 兼容**(用户机器系统 `/usr/bin/python3 = 3.9.6`)。所有新文件必须 `from __future__ import annotations`,不要在运行时表达式里写 `X | Y`(类型注解可以)
+- **代码保持 Python 3.9 兼容**(公开仓 / 兄弟部署可能仍是 3.9;系统 `/usr/bin/python3` 仍是 3.9.6)。所有新文件必须 `from __future__ import annotations`,不要在运行时表达式里写 `X | Y`(类型注解可以)。**但本机 `.venv_lens` 已用 `~/.local/bin/python3.13` 重建**(2026-06):macOS Tahoe 的 Photos 库新 schema 只有 osxphotos 0.69+ 认得,而 0.65+ 需 Py 3.10+。代码 3.9 语法在 3.13 上向前兼容,照常跑。详见「踩过的坑 / macOS Tahoe Photos 库」
 - **venv 叫 `.venv_lens`**(不和兄弟项目冲突)
 - **不要装新框架**。前端原生 HTML + vanilla JS,**不引 React / Vue / Tailwind**
 - **LLM 文本调用**:用户只有 Claude Max plan,**没有 anthropic API key**。统一走 `web/llm.py` 的 `openai-compat`(DeepSeek 默认)。Phase 5 已删 `claude-p` kind,**绝不 `import anthropic`**
@@ -68,6 +70,7 @@ Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`
 |---|---|---|
 | 原图字节 | ❌ 永远本地 | — |
 | 照片描述 / vision JSON | ❌ 永远本地 | — |
+| 相册名(可能含真名/亲属称谓) | ❌ 永远本地 | 本地 Ollama 文本解析(**不走 DeepSeek/高德**),见 `album.py` |
 | GPS 数字(裸 lat/lng) | ✅ | 高德 reverse geocoding |
 | 用户问题文本 | ✅ | LLM(用户自己同意) |
 | 查询返回的精简结果 | ✅ | Round 2 prompt(发描述文本 + photo_id,**不发图本身**) |
@@ -180,9 +183,41 @@ Web「选 Photos 库」按钮走 `pick_folder(mode=photos_library)` → osascrip
 
 fastembed 0.7.4 不传 `cache_dir` 时,模型(bge-small-zh ~95MB)落在 `tempfile.gettempdir()/fastembed_cache`,macOS 上是 `/var/folders/.../T/` —— **系统会定期 purge**(重启 / 闲置几天)。症状:隔几天再扫,第一张照片卡 3-4 分钟"下载模型",其实是临时缓存被清后重下。`embedder.py` 显式传 `cache_dir=<root>/.cache/fastembed/`(和 preprocessed 缓存同级,持久)。**注意代码老注释曾写"下到 ~/.cache/fastembed/",是错的**(那目录从不存在)。
 
-### MCP Python ≥ 3.10,本机 3.9
+### 加生成列(GENERATED ... STORED/VIRTUAL)迁移三连坑 ⚠️⚠️
 
-`pip install mcp` 报 `Requires-Python >=3.10`。**当前**:web chat 走手写两轮 `claude -p` tool loop(`web/chat.py`),不依赖 MCP。等 Python 升级再补。
+给 photos 加 favorite 生成列(`json_extract(derived,'$.favorite')`,Phase 6 收藏功能)时连踩三个:
+
+1. **`ALTER TABLE ADD COLUMN` 只能加 VIRTUAL 生成列,STORED 会报错**。所以 `schema.sql` 的 `CREATE TABLE` 里用 STORED(fresh 安装),`db.py::_migrate_columns` 的 ALTER 用 VIRTUAL(老库)。两者对查询/索引等价。
+2. **`PRAGMA table_info` 不列生成列** → 用它判"列是否已存在"会误判 fresh 库(schema.sql 已建 STORED favorite)缺列 → 再 ALTER → `duplicate column name`。**判存在性必须用 `PRAGMA table_xinfo`**(它列生成列)。
+3. **生成列的 `CREATE INDEX` 不能放 `schema.sql`**:`init_schema` 先 `executescript(schema.sql)` 再 `_migrate_columns`,老库 executescript 阶段 favorite 列还没 ALTER 出来 → `no such column: favorite`。索引必须在 `_migrate_columns` 里、加列之后建。
+
+模板就是已有的 `is_keeper`。新加任何 `derived/` 生成列照此办理。**已处理照片需 `reprocess --group derived` 回填新字段**(老 derived JSON 没这个 key → 生成列 NULL)。
+
+### macOS Tahoe Photos 库需 osxphotos 0.69+ → 本机 venv 升到 Py 3.13 ⚠️⚠️
+
+macOS Tahoe(Darwin 25.x)的 Photos 库是新 schema(asset 表名后缀变了,实测 `Z_33ASSETS`)。**osxphotos 0.64.3(原先为兼容 Py 3.9 钉死的 `<0.65`)读不了**,Phase A 入队直接抛 `sqlite3.OperationalError: no such table: Z_28ASSETS`(它还在找老后缀),scan run 标 failed、total=0。**死结**:支持新库要 osxphotos 0.69+,而 0.65+ 用了运行时 `X | None`(Py 3.10+)。
+
+**解法(2026-06)**:本机其实已装 `~/.local/bin/python3.{10,11,12,13}`,用 **python3.13 重建 `.venv_lens`** + osxphotos 升到 0.75.9,读到 11 万张。`pyproject.toml` 的 apple extra 改成 **python_version marker**:`<3.10` 仍 `osxphotos>=0.60,<0.65`、`>=3.10` 用 `>=0.69`,这样 `lens update` 不会把它打回旧版,也不破公开仓的 3.9 故事。代码本身 3.9 语法在 3.13 上照跑。
+
+### qwen3-vl:8b 的默认 tag 是 thinking 变体,本项目必须 `-instruct` ⚠️⚠️
+
+Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/show` 的 capabilities 含 `thinking`,renderer/parser=`qwen3-vl-thinking`)。本项目 vision 调用是 `format=json` + `num_predict=1024` —— thinking 模型先生成一大段推理链,把 token 预算吃光,`response` 吐**空/截断 JSON**,且慢 3-10 倍。**症状:扫描卡在第一张**(后台 worker 线程把错误吞了,前端只看到不动)。**必须 `ollama pull qwen3-vl:8b-instruct`**(capabilities 无 thinking),代码 `DEFAULT_MODEL` 就是它,零配置命中。
+
+**连带:探活的前缀匹配会给假绿灯**(已修)。`ollama_probe.py::ping` 和 `ollama.py::health_check` 原来用 `m.startswith("qwen3-vl")` 容错匹配 —— 基于"`:8b` 和 `:8b-instruct` 是同一个模型"的**错误假设**(其实前者 thinking),导致只装 thinking 版时配置页/CLI 也判"已就位",把问题遮住直到扫描才暴露。**已改成精确 tag 匹配 + `/api/show` 读 capabilities,命中 thinking 时明确警告**。教训:**凡"模型是否就位"的探活,别只比名字前缀,要精确 tag + 能力(最好再试跑一次)**。
+
+### MCP Python ≥ 3.10(本机 venv 已是 3.13,不再受阻)
+
+`pip install mcp` 要 `Requires-Python >=3.10`。原先本机 venv 是 3.9 装不了;**2026-06 venv 升 3.13 后这条解除**(见上「macOS Tahoe」)。**当前**:web chat 仍走手写两轮 `web/llm.py` openai-compat tool loop,不依赖 MCP;要补 MCP server 现在环境已就绪。
+
+### album 名解析:8B 城市猜测不可靠,先 curate 缓存再回填 ⚠️
+
+`album.py` 用本地 Ollama(qwen3-vl:8b)解析相册名补地点。**8B 对模糊地名的城市/国家判断不稳**:实测把"奥体"猜成杭州、"艺术照"脑补成三亚、国家"日本"塞进 city。prompt 加"模糊就 null / 国家→null"也不稳定遵守(老问题,见「拆调用 > 长 prompt」)。
+
+**对策不是硬调 prompt,而是利用相册名是小集合**:一个库 unique 相册名通常只有几十个。流程:dry-run 解析 → 把 unique 名的 country/city/place/tags 打表给用户 → 用户口述修正、直接 `UPDATE album_parse_cache` → 从修正后缓存全量回填(`reprocess_albums` 纯读缓存不再调 LLM,3156 张 ~1min)。
+
+**改 cache 的 city 必须连 province 一起改** ⚠️:踩过坑——只 `UPDATE city='北京'` 没改 province,残留的省(浙江/海南)被 `amap._build_formatted_address` 拼成"海南北京""浙江北京"。改完自查 `WHERE province IS NOT NULL AND city IS NOT NULL AND province!=city`(同省不同名如 海南/三亚、湖南/郴州 是正常的,要排除)。
+
+分层约定:国外只到国家 → `location_bucket.country`,city 留 null;景点(颐和园)→ `poi_name`,只有城市时 `place_name` 留空(跟 GPS 路径一致,不拿城市名顶替)。tag 白名单类的批量清理是**一次性人工 curate**,不进 prompt/代码(否则将来新扫描会被永久约束)。
 
 ## 数据布局
 
@@ -201,7 +236,7 @@ fastembed 0.7.4 不传 `cache_dir` 时,模型(bge-small-zh ~95MB)落在 `tempfil
 - `vision.*` 是 LLM 死字符串,改名后**残留旧名,接受**
 - `people.persons[].cluster_id` 是锚,name 查询时 join `persons` 表实时 resolve
 - `people.names[]` 是派生去重列表,SQL 查询方便
-- `derived.location_bucket` 走 amap reverse,失败 graceful 全 null
+- `derived.location_bucket` 优先 amap reverse(GPS),失败 graceful 全 null;无 GPS 时 album 名解析兜底(填 country/city/poi_name,跟 GPS 同 `_build_formatted_address` 格式;无来源标记字段)
 - `meta.errors[]` 装 self-check / vision_role_mismatch,带 `acknowledged` 字段
 
 ## Vision Prompt v9.2 要点
@@ -240,7 +275,7 @@ fastembed 0.7.4 不传 `cache_dir` 时,模型(bge-small-zh ~95MB)落在 `tempfil
 
 热读取(每次调用读 JSON),改 config 不需要重启。旧 `kind="claude-p"` 启动时忽略 + WARN。Env `LIFE_LENS_LLM_PROVIDER/MODEL/API_KEY/BASE_URL` 可临时覆盖。
 
-**query/ 共享层**(三轨共用):`search.search_photos(query, time_from, time_to, persons[], persons_mode, location, query_expansions, limit)` hybrid FTS5+sem RRF / `aggregate.places_visited(year?)` / `aggregate.counts_by_year()`。
+**query/ 共享层**(三轨共用):`search.search_photos(query, time_from, time_to, persons[], persons_mode, location, query_expansions, favorite_only, limit)` hybrid FTS5+sem RRF / `aggregate.places_visited(year?)` / `aggregate.counts_by_year()`。`favorite_only=True` 走 `photos.favorite` 生成列(源自 `derived.favorite` ← Apple 收藏);收藏在结果里**轻加权**(`_apply_favorite_boost` 上浮 ~3 位,不置顶)。browse `/api/photos?favorite_only=true` + ⭐ 角标 + "只看收藏" 开关同源。
 
 **MCP server**:推迟(Py ≥ 3.10)。
 
@@ -286,6 +321,9 @@ argparse,**不要换 click/typer**。**主操作入口是 Web 端**,CLI 兜底�
 | `rematch_faces`(quick) | 不跑 detect,用已有 embedding 重新算 max-pooling,把主库脸吸到已命名 anchor | 秒级到几十秒 |
 | `reprocess_faces`(full) | 重跑 InsightFace detect + assign | 几小时 |
 | `reprocess_vision_for(photo_ids)` | 指定 photo 重跑 vision(两次调用),prompt 注入当前最新人名 → description 用真名 | 每张 ~40s |
+| `reprocess_albums(photo_ids, dry_run)` | 不重跑 vision,从 albums 补 location 城市/景点 + 合并事件 tag(读 album_parse_cache)。`dry_run` 返前后对比明细 | 几千张 ~1min |
+
+`reprocess_albums` **未接 CLI / Web**(原计划判定非必需),靠临时脚本 / `python -c` 驱动,配合 curate 后的 `album_parse_cache`(见「album 名解析」坑)。`photo_ids_for_run(conn, run_id)` 取某 run 的全部 photo_id。
 
 ## 测试节奏
 
@@ -334,9 +372,10 @@ sqlite3 ~/.life_lens/lens.db "SELECT photo_id, json_extract(exif, '$.captured_at
 life_lens/sources/             数据源 adapter(filesystem / photos_library)
 life_lens/preprocess/cache.py  缓存键 = photo_id;改了所有缓存失效
 life_lens/exif/extract.py      只 4 个字段,EXIF 别加机型/参数
-life_lens/scanner/derived.py   派生规则,改了 reprocess --group derived
+life_lens/scanner/derived.py   派生规则,改了 reprocess --group derived(location_bucket album 国家/城市/景点兜底 + favorite/hidden 镜像 source_signals)
+life_lens/scanner/album.py     相册名→国家/城市/景点+事件关键词(本地 Ollama 解析 + album_parse_cache 去重缓存)
 life_lens/scanner/runner.py    Phase A/B + graceful stop + 拍照时间正序 + amap quota 监控
-life_lens/scanner/reprocess.py rematch/reprocess_faces + reprocess_vision_for + select_photos
+life_lens/scanner/reprocess.py rematch/reprocess_faces + reprocess_vision_for + reprocess_albums(run 范围+dry_run)+ select_photos
 life_lens/vision/prompts.py    v9.2 + _bbox_position(9 宫格)+ _desc/_struct_set_of_mark
 life_lens/vision/role_check.py description ↔ persons.actions 自检
 life_lens/geocode/amap.py      WGS-84→GCJ-02 + 50m 网格 + 配额 + POI 距离最近

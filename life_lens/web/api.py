@@ -834,14 +834,16 @@ def photos(
     page: int = 0,
     page_size: int = 60,
     order_by: str = "captured",   # 'captured'(默认,拍照时间倒序) | 'imported'(写入 db 时间倒序)
+    favorite_only: bool = False,  # True → 只列 Apple 收藏
 ):
     conn = _conn(request)
     try:
         items = repo.list_photos(
-            conn, limit=page_size, offset=page * page_size, order_by=order_by
+            conn, limit=page_size, offset=page * page_size, order_by=order_by,
+            favorite_only=favorite_only,
         )
         name_map = repo.cluster_name_map(conn)
-        total = repo.count_photos(conn)
+        total = repo.count_photos(conn, favorite_only=favorite_only)
     finally:
         conn.close()
     items = [repo.resolve_persons(r, name_map) for r in items]

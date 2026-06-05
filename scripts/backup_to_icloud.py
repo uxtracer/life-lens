@@ -1,6 +1,8 @@
 """增量备份 ~/.life_lens 到 iCloud Drive。
 
 - lens.db 用 sqlite3 .backup API 做 WAL-safe 原子快照(直接 cp 在 WAL 模式可能 inconsistent)
+- **覆盖前先把现有 lens.db 滚存为 lens.db.prev(单槽位历史)**:每次导出保留上一份,
+  万一某次写进坏 db 还能从 .prev 回滚。单槽位 = 只挡得住"最近一次"坏导出,连跑两次坏的会冲掉好的。
 - 其他文件(config.json / seeds / reports)用 rsync 增量同步
 - 排除:.cache/preprocessed(5-6GB+ 缓存,删了下次自动重生)、backups/(本地快照)、 lens.db-wal/shm
 - AGENT_GUIDE.md 从项目目录拷一份过去(给第三方 agent 看)
@@ -34,6 +36,13 @@ def backup_sqlite(src: Path, dst: Path, *, dry: bool) -> None:
     (有些应用打开 SQLite 默认会切 WAL,会污染备份目录)。
     """
     print(f"[db]  {src} → {dst}")
+    # 覆盖前滚存历史:现有 dst → dst.prev(保留上一份,可回滚)
+    prev = dst.with_name(dst.name + ".prev")
+    if dst.exists():
+        ts = datetime.fromtimestamp(dst.stat().st_mtime)
+        print(f"[db]  滚存历史 {dst.name} → {prev.name}(原备份时间 {ts:%Y-%m-%d %H:%M})")
+        if not dry:
+            shutil.copy2(dst, prev)
     if dry:
         return
     dst.parent.mkdir(parents=True, exist_ok=True)

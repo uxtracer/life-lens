@@ -6,8 +6,30 @@
 """
 from __future__ import annotations
 
-from life_lens.query.search import search_photos
+from life_lens.query.search import search_photos, _apply_favorite_boost
 from life_lens.query.aggregate import places_visited, counts_by_year
+
+
+def test_search_favorite_only_filters(favorite_db):
+    """favorite_only=True 只返 derived.favorite=1 的照片(生成列过滤)。"""
+    r = search_photos(favorite_db, favorite_only=True)
+    ids = {it["photo_id"] for it in r["items"]}
+    assert ids == {"p_f1", "p_f3"}
+    assert all(it["favorite"] for it in r["items"])
+    assert search_photos(favorite_db, favorite_only=False)["total"] == 4
+
+
+def test_search_favorite_only_with_person(favorite_db):
+    """收藏 + 人物组合:张三的收藏只有 p_f1(p_f2 张三但非收藏)。"""
+    r = search_photos(favorite_db, persons=["张三"], favorite_only=True)
+    assert {it["photo_id"] for it in r["items"]} == {"p_f1"}
+
+
+def test_favorite_boost_is_light():
+    """收藏轻加权:末位收藏上浮约 bonus 位,不置顶、非收藏相对顺序不乱。"""
+    items = [{"photo_id": str(i), "favorite": (i == 5)} for i in range(6)]
+    ids = [it["photo_id"] for it in _apply_favorite_boost(items, bonus=3)]
+    assert ids == ["0", "1", "2", "5", "3", "4"]
 
 
 def test_search_photos_no_query_returns_all(populated_db):

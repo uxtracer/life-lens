@@ -121,6 +121,7 @@ ROUND1_SYSTEM_TEMPLATE = """你是一个相册查询调度器。用户会问一�
            persons?: [人名数组,如 ["小明"]],
            persons_mode?: "OR"(默认,任一在) | "AND"(都在同一张),
            location?: 城市/地点/国家关键词,
+           favorite_only?: true | false(默认 false)。用户明说"我收藏的""收藏过的""标星/喜欢的"照片时传 true;可和其他条件组合(如收藏的某人照片),
            limit?: 默认 80,召回宽好挑;合影/聚会/某人某主题等"宽搜"场景可放到 150-200(系统硬上限 200) }}
    **query_expansions 重要**:dense embedding 对"短 query + 长 description"有弱点,
    query 是具体物品/装饰(裙子/墨镜/草帽)时关键词埋在长 description 里召回不准 — 你扩词补足字面命中。
@@ -164,6 +165,8 @@ ROUND1_SYSTEM_TEMPLATE = """你是一个相册查询调度器。用户会问一�
 - 用户问 "我去过哪些地方" → {{"action":"places_visited","args":{{}},"rationale":"按地点聚合"}}
 - 用户问 "今年拍了多少照片" → 用今天日期的当前年算 time_from / time_to
 - 用户问 "海边的照片" → {{"action":"search_photos","args":{{"query":"海边"}},"rationale":"场景类查询,hybrid 检索"}}(语义路径自动召回沙滩/海岸/海面等近义场景,即使 description 没出现"海边"二字)
+- 用户问 "我收藏的照片" → {{"action":"search_photos","args":{{"favorite_only":true,"limit":150}},"rationale":"用户要看收藏,favorite_only 过滤;不限主题放大 limit"}}
+- 用户问 "小明收藏的合影" → {{"action":"search_photos","args":{{"persons":["小明"],"favorite_only":true}},"rationale":"收藏+人物组合过滤"}}
 """
 
 

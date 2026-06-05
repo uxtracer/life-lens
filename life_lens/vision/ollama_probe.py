@@ -21,6 +21,18 @@ def _default_vision_model() -> str:
     return get_configured_model()
 
 
+def _model_capabilities(endpoint: str, model: str, timeout: float = 2.0) -> Optional[list]:
+    """读 /api/show 拿 capabilities(用来识别 thinking 变体)。失败返 None,不让探活挂。"""
+    try:
+        r = requests.post(
+            f"{endpoint.rstrip('/')}/api/show", json={"model": model}, timeout=timeout
+        )
+        r.raise_for_status()
+        return r.json().get("capabilities") or []
+    except Exception:
+        return None
+
+
 # 静态默认(仅作为 fallback / 测试)— 真实调用走 _default_*()
 DEFAULT_ENDPOINT = os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
 DEFAULT_VISION_MODEL = "qwen3-vl:8b-instruct"
@@ -45,18 +57,41 @@ def ping(endpoint: Optional[str] = None, timeout: float = 2.0) -> dict[str, Any]
         r = requests.get(url, timeout=timeout)
         r.raise_for_status()
         models = [m.get("name", "") for m in (r.json().get("models") or [])]
-        # 检查目标 vision 模型(精确匹配 + 容错前缀匹配)
-        has_vision = any(
-            m == vision_model or m.startswith(vision_model.split(":")[0] + ":")
-            for m in models
-        )
-        return {
+        # 精确匹配 tag — 不要前缀容错。
+        # 教训:qwen3-vl:8b 和 qwen3-vl:8b-instruct 不是同一个模型(前者是 thinking 变体,
+        # 在 format=json 下吐空/截断 → 扫描卡在第一张)。前缀匹配会把 thinking 版误判成"已就位"。
+        has_vision = vision_model in models
+        result = {
             "ok": True,
             "endpoint": endpoint,
             "models": models,
             "has_vision_model": has_vision,
             "vision_model_name": vision_model,
         }
+        if not has_vision:
+            fam_prefix = vision_model.split(":")[0] + ":"
+            family = [m for m in models if m.startswith(fam_prefix)]
+            if family:
+                thinking = [
+                    m for m in family
+                    if "thinking" in (_model_capabilities(endpoint, m) or [])
+                ]
+                if thinking:
+                    result["warning"] = (
+                        f"未装精确模型 {vision_model}。本地的 {', '.join(thinking)} 是 thinking 变体,"
+                        f"在 format=json 下会吐空/截断(扫描会卡在第一张)。"
+                        f"请 `ollama pull {vision_model}`。"
+                    )
+                else:
+                    result["warning"] = (
+                        f"未装 {vision_model}(本地有同系 {', '.join(family)},但 tag 不精确匹配)。"
+                        f"请 `ollama pull {vision_model}`。"
+                    )
+            else:
+                result["warning"] = (
+                    f"未装 vision 模型 {vision_model}。请 `ollama pull {vision_model}`。"
+                )
+        return result
     except requests.exceptions.ConnectionError:
         return {
             "ok": False,

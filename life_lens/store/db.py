@@ -16,7 +16,7 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 #             persons.age+gender_estimate / photos_fts trigram / amap_quota /
 #             photo_embeddings(语义向量)
 # 后续 v2+ 时:加 _migrate_v1_to_v2 之类函数,init_schema 按版本递增调用。
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 log = logging.getLogger(__name__)
 
@@ -132,12 +132,34 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     if "snapshot_scanned_up_to" not in run_cols:
         conn.execute("ALTER TABLE scan_runs ADD COLUMN snapshot_scanned_up_to TEXT")
 
+    # album_parse_cache 加 place 列(具体景点/地标)。旧缓存是无 place 字段的 prompt 解析的,
+    # place 一律为 null → 清空让其按新 prompt 重解析(缓存为小集合,重解析成本低)。
+    ac_cols = {row["name"] for row in conn.execute("PRAGMA table_info(album_parse_cache)").fetchall()}
+    if ac_cols and "place" not in ac_cols:
+        conn.execute("ALTER TABLE album_parse_cache ADD COLUMN place TEXT")
+        conn.execute("DELETE FROM album_parse_cache")
+    if ac_cols and "country" not in ac_cols:
+        conn.execute("ALTER TABLE album_parse_cache ADD COLUMN country TEXT")
+
     # persons 加 age/gender estimate(给 vision prompt 做位置 + demographics hint 用)
     p_cols = {row["name"] for row in conn.execute("PRAGMA table_info(persons)").fetchall()}
     if "age_estimate" not in p_cols:
         conn.execute("ALTER TABLE persons ADD COLUMN age_estimate INTEGER")
     if "gender_estimate" not in p_cols:
         conn.execute("ALTER TABLE persons ADD COLUMN gender_estimate INTEGER")
+
+    # photos 加 favorite 生成列(从 derived.favorite 抽出,供"只看收藏"过滤 + 收藏轻加权)。
+    # ALTER TABLE 加生成列只能 VIRTUAL(STORED 不允许后加);VIRTUAL 列照样能建索引、能 WHERE。
+    # 老库已处理照片 derived 里还没 favorite 字段 → 列值为 NULL,需 reprocess --group derived 回填。
+    # 用 table_xinfo:PRAGMA table_info 不列生成列(favorite/is_keeper 这种),
+    # 会误判 fresh 库(schema.sql 里 CREATE TABLE 已带 STORED favorite)缺列 → 再 ALTER → "duplicate column"。
+    ph_cols = {row[1] for row in conn.execute("PRAGMA table_xinfo(photos)").fetchall()}
+    if "favorite" not in ph_cols:
+        conn.execute(
+            "ALTER TABLE photos ADD COLUMN favorite INTEGER "
+            "GENERATED ALWAYS AS (json_extract(derived, '$.favorite')) VIRTUAL"
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_photos_favorite ON photos(favorite)")
 
     # photos_fts 旧 schema 用 unicode61(不索引中文),迁移到 trigram。
     # FTS5 虚拟表不能 ALTER tokenizer / 列名,只能 DROP + CREATE。

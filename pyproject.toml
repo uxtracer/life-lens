@@ -21,7 +21,10 @@ dependencies = [
 [project.optional-dependencies]
 vision = []
 faces = ["onnxruntime>=1.17", "insightface>=0.7"]
-apple = ["osxphotos>=0.60,<0.65"]   # 0.65+ uses runtime `X | None` syntax (Py 3.10+),会在 Py 3.9 import 时 TypeError
+apple = [
+    "osxphotos>=0.60,<0.65; python_version < '3.10'",  # 0.65+ uses runtime `X | None` syntax (Py 3.10+),会在 Py 3.9 import 时 TypeError
+    "osxphotos>=0.69; python_version >= '3.10'",        # 新版 Photos 库(macOS Tahoe schema)只有新 osxphotos 认得,需 Py 3.10+
+]
 semantic = ["fastembed>=0.4", "httpx[socks]"]
 mcp = ["mcp>=0.9"]
 dev = ["pytest>=8.0"]

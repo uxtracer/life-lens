@@ -309,6 +309,15 @@ def reprocess_vision_for(root: Path, photo_ids: list[str], model: str = None) ->
                         "at": repo.now_iso(),
                     })
 
+                # album 事件关键词重注进 vision.tags(与扫描路径一致,重跑不丢)
+                try:
+                    albums = (meta.get("source_signals") or {}).get("albums") or []
+                    if albums:
+                        from . import album as album_mod
+                        album_mod.merge_album_tags(new_vision, albums, conn)
+                except Exception as e:
+                    log.warning("album tags 合并失败 photo=%s: %s", pid, e)
+
                 conn.execute(
                     """UPDATE photos SET vision = ?, people = ?, meta = ?, updated_at = ?
                        WHERE photo_id = ?""",
@@ -402,6 +411,134 @@ def reprocess_derived(root: Path) -> dict:
             "failed": failed,
             "no_gps": no_gps,
             "with_location": with_location,
+        }
+    finally:
+        conn.close()
+
+
+def photo_ids_for_run(conn, run_id: str) -> list[str]:
+    """某个 scan run 关联的所有(非种子)photo_id,按 jobs.run_id。"""
+    rows = conn.execute(
+        """SELECT j.photo_id FROM jobs j
+           JOIN photos p ON p.photo_id = j.photo_id
+           WHERE j.run_id = ? AND p.source != 'seed'""",
+        (run_id,),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def reprocess_albums(root: Path, photo_ids: list[str], dry_run: bool = False) -> dict:
+    """从 source_signals.albums 解析,补 location_bucket 城市 + 合并事件关键词进 vision.tags。
+
+    **不重跑 vision**(只读已存的 albums + 已有 vision)。本地 LLM 解析相册名(去重缓存)。
+    dry_run=True 时不写库,只返回每张前后对比明细(供 review)。
+    """
+    import json
+    from . import album as album_mod
+    from . import derived as derive_mod
+    from ..schema.photo_record import stamp_group_version
+
+    conn = db.connect(db.get_db_path(root))
+    db.init_schema(conn)
+    embedder = None
+    if not dry_run:
+        from .runner import _get_embedder_for_scan
+        embedder = _get_embedder_for_scan()
+    try:
+        done = 0
+        failed = 0
+        no_albums = 0
+        city_filled = 0
+        tags_added = 0
+        details: list[dict] = []
+
+        for pid in photo_ids:
+            try:
+                row = conn.execute(
+                    "SELECT identity, exif, vision, people, derived, meta FROM photos WHERE photo_id = ?",
+                    (pid,),
+                ).fetchone()
+                if row is None:
+                    failed += 1
+                    continue
+                rec = {
+                    "identity": json.loads(row["identity"]),
+                    "exif":     json.loads(row["exif"])    if row["exif"]    else None,
+                    "vision":   json.loads(row["vision"])  if row["vision"]  else None,
+                    "people":   json.loads(row["people"])  if row["people"]  else None,
+                    "derived":  json.loads(row["derived"]) if row["derived"] else None,
+                    "meta":     json.loads(row["meta"])    if row["meta"]    else {},
+                }
+                albums = ((rec["meta"].get("source_signals") or {}).get("albums")) or []
+                if not albums:
+                    no_albums += 1
+                    continue
+
+                sig = album_mod.signals_for_albums(albums, conn)
+
+                vision = rec.get("vision") or {}
+                tags_before = list(vision.get("tags") or [])
+                lb_before = (rec.get("derived") or {}).get("location_bucket") or {}
+                city_before = lb_before.get("city")
+
+                album_mod.merge_album_tags(vision, albums, conn)  # 原地改 vision["tags"]
+                rec["vision"] = vision
+                tags_after = list(vision.get("tags") or [])
+
+                new_derived = derive_mod.compute(rec, conn=conn)
+                lb_after = new_derived.get("location_bucket") or {}
+                city_after = lb_after.get("city")
+
+                if set(tags_after) != set(tags_before):
+                    tags_added += 1
+                if city_after and not city_before:
+                    city_filled += 1
+
+                if dry_run:
+                    details.append({
+                        "photo_id": pid,
+                        "albums": albums,
+                        "parsed": sig,
+                        "tags_before": tags_before,
+                        "tags_after": tags_after,
+                        "city_before": city_before,
+                        "city_after": city_after,
+                        "place_name_after": lb_after.get("place_name"),
+                        "formatted_address_after": lb_after.get("formatted_address"),
+                    })
+                else:
+                    stamp_group_version(rec, "derived", "rules-v3-album")
+                    conn.execute(
+                        "UPDATE photos SET vision=?, derived=?, meta=?, updated_at=? WHERE photo_id=?",
+                        (
+                            json.dumps(vision, ensure_ascii=False),
+                            json.dumps(new_derived, ensure_ascii=False),
+                            json.dumps(rec["meta"], ensure_ascii=False),
+                            repo.now_iso(),
+                            pid,
+                        ),
+                    )
+                    repo.update_fts(conn, pid, vision, rec.get("people"))
+                    emb = repo.update_embedding(conn, pid, vision, rec.get("people"), embedder)
+                    if emb == "failed":
+                        log.warning("album reprocess embedding 失败 photo=%s", pid)
+                    conn.commit()
+                done += 1
+            except Exception:
+                failed += 1
+                log.exception("reprocess albums failed for %s", pid)
+
+        return {
+            "ok": True,
+            "group": "albums",
+            "dry_run": dry_run,
+            "requested": len(photo_ids),
+            "done": done,
+            "failed": failed,
+            "no_albums": no_albums,
+            "city_filled": city_filled,
+            "tags_added": tags_added,
+            "details": details,
         }
     finally:
         conn.close()

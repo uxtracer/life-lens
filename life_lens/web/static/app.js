@@ -14,19 +14,34 @@ const api = (path, opts = {}) => fetch('/api' + path, {
 
 const VALID_TABS = new Set(['settings', 'faces', 'scan', 'browse', 'chat']);
 
+// browse "只看收藏" 开关。必须在顶部声明 —— init IIFE 会在脚本执行早期(本行之后但
+// 远在 refreshThumbs 定义处之前)调 refreshThumbs,若声明放在 refreshThumbs 旁会落入
+// TDZ:"Cannot access 'browseFavOnly' before initialization"。
+let browseFavOnly = false;
+
 function activateTab(name) {
     if (!VALID_TABS.has(name)) name = 'settings';
     document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.page === name));
     document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === name));
     // 记住当前 tab,刷新页面继续在这里
     try { localStorage.setItem('life_lens.last_tab', name); } catch (_) {}
-    if (name === 'settings')     refreshSettings();
-    else if (name === 'faces')   refreshClusters();
-    else if (name === 'scan')    refreshScanTab();
-    else if (name === 'browse')  refreshThumbs();
+    // refresh 是 async,fire-and-forget:任何 reject 必须冒出来,否则 tab 内容永远卡在
+    // "加载中……" 占位、用户无从知道原因(强刷时某个 init fetch 偶发失败就这症状)。
+    const guard = (p) => Promise.resolve(p).catch(err => {
+        console.error(`tab[${name}] 刷新失败:`, err);
+        const page = document.getElementById(name);
+        const ph = page && page.querySelector('#browse-header, .embeddings-box, .page-loading');
+        if (ph) ph.innerHTML =
+            `<span style="color:#b91c1c">加载失败:${escapeHtml(err.message || String(err))} ` +
+            `<button class="secondary" onclick="activateTab('${name}')">重试</button></span>`;
+    });
+    if (name === 'settings')     guard(refreshSettings());
+    else if (name === 'faces')   guard(refreshClusters());
+    else if (name === 'scan')    guard(refreshScanTab());
+    else if (name === 'browse')  guard(refreshThumbs());
     else if (name === 'chat') {
         document.getElementById('chat-input').focus();
-        refreshChatProviders();
+        guard(refreshChatProviders());
     }
 }
 
@@ -199,7 +214,8 @@ function renderOllamaCard(ollama) {
             issue = `<div class="config-issue-warn"><b>❌ Ollama 服务没连上</b>(<code>${escapeHtml(currentEndpoint)}</code>)<br>错误:${escapeHtml(ollama.error || '(unknown)')}</div>`;
         } else if (!ollama.has_vision_model) {
             const installed = installedModels.map(m => `<code>${escapeHtml(m)}</code>`).join(', ') || '(无)';
-            issue = `<div class="config-issue-warn"><b>⚠ Ollama 通了,但当前配的模型 <code>${escapeHtml(currentModel)}</code> 没装</b><br>已装的模型:${installed}</div>`;
+            const warnLine = ollama.warning ? `<br>${escapeHtml(ollama.warning)}` : '';
+            issue = `<div class="config-issue-warn"><b>⚠ Ollama 通了,但当前配的模型 <code>${escapeHtml(currentModel)}</code> 没装</b><br>已装的模型:${installed}${warnLine}</div>`;
         }
         body.innerHTML = guide + issue + editForm;
         wireVisionForm();
@@ -1171,31 +1187,48 @@ document.addEventListener('click', async (e) => {
 async function refreshThumbs() {
     // 最近导入的 200 张(按 photos.created_at DESC 排,对应"刚跑完 vision 入库的"),
     // 不是按拍照时间排 — 主线扫描按拍照 ASC 顺序入,新进库的可能是几年前老照片
+    const favParam = browseFavOnly ? '&favorite_only=true' : '';
     const [r, status] = await Promise.all([
-        api('/photos?page=0&page_size=200&order_by=imported'),
+        api(`/photos?page=0&page_size=200&order_by=imported${favParam}`),
         api('/status').catch(() => ({})),
     ]);
     const total = (status.global && status.global.photos_total) || r.total || 0;
     const header = document.getElementById('browse-header');
     if (header) {
-        header.textContent =
-            `最近导入的 ${r.items.length} 张照片 · 图片库共 ${total.toLocaleString()} 张已扫描完成`;
+        const label = browseFavOnly
+            ? `⭐ 收藏 ${r.total.toLocaleString()} 张`
+            : `最近导入的 ${r.items.length} 张照片 · 图片库共 ${total.toLocaleString()} 张已扫描完成`;
+        header.innerHTML =
+            `<span>${label}</span>` +
+            `<button id="browse-fav-toggle" class="secondary" style="margin-left:10px">` +
+            `${browseFavOnly ? '✕ 退出只看收藏' : '⭐ 只看收藏'}</button>`;
+        const btn = document.getElementById('browse-fav-toggle');
+        if (btn) btn.onclick = () => { browseFavOnly = !browseFavOnly; refreshThumbs(); };
     }
     const grid = document.getElementById('thumb-grid');
     grid.innerHTML = '';
     r.items.forEach(item => {
         const id = item.identity.photo_id;
+        const fav = !!(item.derived && item.derived.favorite);
         const d = document.createElement('div');
         d.className = 'thumb';
+        d.style.position = 'relative';
+        const favBadge = fav
+            ? '<span class="fav-badge" style="position:absolute;top:4px;right:5px;'
+              + 'font-size:15px;line-height:1;text-shadow:0 0 3px rgba(0,0,0,.6);pointer-events:none">⭐</span>'
+            : '';
         d.innerHTML = `
             <img src="/api/thumb/${id}" loading="lazy" onerror="this.style.background='#eee'">
+            ${favBadge}
             <div class="cap">${item.identity.original_path.split('/').pop()}</div>
         `;
         d.onclick = () => showDetail(id);
         grid.appendChild(d);
     });
     if (r.items.length === 0) {
-        grid.innerHTML = '<p class="hint">还没有照片。先在「数据源」添加目录，然后到「扫描」页扫一次。</p>';
+        grid.innerHTML = browseFavOnly
+            ? '<p class="hint">还没有扫描到收藏的照片。继续扫描或先在 Photos.app 里标星。</p>'
+            : '<p class="hint">还没有照片。先在「数据源」添加目录，然后到「扫描」页扫一次。</p>';
     }
 }
 
@@ -1303,7 +1336,7 @@ async function refreshClusters() {
 }
 
 // 回答下方追加 LLM 没引用但 search 召回的其他候选,默认折叠
-function appendUncitedPhotos(parentDiv, photoIds) {
+function appendUncitedPhotos(parentDiv, photoIds, favoriteIds) {
     const wrap = document.createElement('details');
     wrap.className = 'chat-uncited';
     const summary = document.createElement('summary');
@@ -1332,6 +1365,7 @@ function appendUncitedPhotos(parentDiv, photoIds) {
         img.onclick = () => openViewer(id);
         // src 只在 details 第一次展开时设置(避免一次性下载几十张缩略图)
         w.appendChild(img);
+        _addFavStar(w, favoriteIds && favoriteIds.has(id));
         grid.appendChild(w);
     });
     wrap.appendChild(grid);
@@ -1629,7 +1663,19 @@ function _fixPhotoId(id, candidateIds) {
     return null;   // 既不在候选也无唯一前缀匹配 → 幻觉,丢
 }
 
-function renderAssistantBody(div, text, candidateIds) {
+function _addFavStar(wrap, isFav) {
+    // 收藏 ⭐ 角标,覆盖在缩略图右上角(chat / browse 复用同款)
+    if (!isFav) return;
+    if (!wrap.style.position) wrap.style.position = 'relative';
+    const star = document.createElement('span');
+    star.className = 'fav-badge';
+    star.textContent = '⭐';
+    star.style.cssText = 'position:absolute;top:2px;right:3px;font-size:13px;'
+        + 'line-height:1;text-shadow:0 0 3px rgba(0,0,0,.6);pointer-events:none';
+    wrap.appendChild(star);
+}
+
+function renderAssistantBody(div, text, candidateIds, favoriteIds) {
     // 抠 [photo:xxx] + 程序校验/修复截短 id,主体走 markdown,缩略图单独追加
     const rawIds = [...text.matchAll(/\[photo:([A-Za-z0-9_-]+)\]/g)].map(m => m[1]);
     // _fixPhotoId 返 null = 幻觉 id,filter 掉不渲染
@@ -1671,6 +1717,7 @@ function renderAssistantBody(div, text, candidateIds) {
         };
         img.onclick = () => openViewer(id);
         wrap.appendChild(img);
+        _addFavStar(wrap, favoriteIds && favoriteIds.has(id));
         pdiv.appendChild(wrap);
     });
 }
@@ -1687,6 +1734,7 @@ chatForm.addEventListener('submit', async (e) => {
     let buf = '';
     let toolResultItems = [];   // result 帧的 raw items(完整候选,LLM 可能只引用一部分)
     let candidateIds = new Set();   // 候选完整 id 集合(给 _fixPhotoId 做前缀补全 — LLM 偶发截短)
+    let favoriteIds = new Set();    // 候选里 favorite=true 的 id 集合(给缩略图打 ⭐ 角标)
     try {
         const r = await fetch('/api/chat', {
             method: 'POST',
@@ -1729,6 +1777,9 @@ chatForm.addEventListener('submit', async (e) => {
                     );
                     // 候选 id 集合(_fixPhotoId 用 — LLM 偶发把 36 字符 uuid 截到 8 位前缀)
                     candidateIds = new Set(toolResultItems.map(it => it.photo_id).filter(Boolean));
+                    favoriteIds = new Set(
+                        toolResultItems.filter(it => it.favorite).map(it => it.photo_id).filter(Boolean)
+                    );
                     if (metaDiv.dataset.gotPlan) {
                         // 更新 summary 字段不动其他
                         const sumEl = metaDiv.querySelector('.chat-trace-summary');
@@ -1738,7 +1789,7 @@ chatForm.addEventListener('submit', async (e) => {
                     }
                 } else if (evt === 'chunk') {
                     buf += parsed;
-                    renderAssistantBody(respDiv, buf, candidateIds);
+                    renderAssistantBody(respDiv, buf, candidateIds, favoriteIds);
                     chatLog.scrollTop = chatLog.scrollHeight;
                 } else if (evt === 'done') {
                     // 在回答下方追加"未被回答引用的其他候选"折叠区
@@ -1747,7 +1798,7 @@ chatForm.addEventListener('submit', async (e) => {
                         .map(it => it.photo_id)
                         .filter(pid => pid && !citedIds.has(pid));
                     if (uncited.length > 0) {
-                        appendUncitedPhotos(respDiv, uncited);
+                        appendUncitedPhotos(respDiv, uncited, favoriteIds);
                     }
                     // trace 框保留,只在末尾追加"引用 N 张"
                     if (metaDiv.dataset.gotPlan) {

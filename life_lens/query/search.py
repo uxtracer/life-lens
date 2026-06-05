@@ -113,6 +113,7 @@ def _row_to_item(row: sqlite3.Row, name_map: dict) -> dict:
         "persons":     resolved_persons,
         "formatted_address": loc.get("formatted_address") or loc.get("place_name") or loc.get("city"),
         "photo_type":  derived.get("photo_type"),
+        "favorite":    bool(derived.get("favorite")),
     }
 
 
@@ -150,15 +151,19 @@ def _build_extra_filters(
     persons: Optional[list[str]],
     location: Optional[str],
     persons_mode: str = "OR",
+    favorite_only: bool = False,
 ) -> tuple[list[str], list]:
     """time/persons/location filter 拼 SQL 片段(两路共用)。
 
     persons_mode:
       - 'OR'(默认):任一人物命中(查"X 出现过的照片")
       - 'AND':所有人物都在同一张(查"X 和 Y 的合影")
+    favorite_only: True → 只返 Apple 收藏(derived.favorite=1 的生成列)
     """
     where: list[str] = []
     params: list = []
+    if favorite_only:
+        where.append("p.favorite = 1")
     if persons:
         mode = (persons_mode or "OR").upper()
         if mode == "AND":
@@ -211,6 +216,7 @@ def _search_fts(
     limit: int,
     offset: int,
     persons_mode: str = "OR",
+    favorite_only: bool = False,
 ) -> dict:
     """原 FTS5/LIKE + 过滤路径。trigram 要求 token ≥ 3 字,短词 fallback LIKE。"""
     sql_parts = ["SELECT DISTINCT p.photo_id, p.captured_at_utc, p.vision, p.people, p.derived, p.exif"]
@@ -249,7 +255,7 @@ def _search_fts(
         order = "ORDER BY p.captured_at_utc DESC"
 
     extra_where, extra_params = _build_extra_filters(
-        conn, time_from, time_to, persons, location, persons_mode
+        conn, time_from, time_to, persons, location, persons_mode, favorite_only
     )
     where.extend(extra_where)
     params.extend(extra_params)
@@ -277,6 +283,7 @@ def _search_semantic(
     location: Optional[str],
     limit: int,
     persons_mode: str = "OR",
+    favorite_only: bool = False,
 ) -> list[dict]:
     """语义召回 + 应用其他 filter。失败时返 [],调用方 fallback 到 FTS-only。"""
     from .semantic import get_semantic_index, has_embeddings
@@ -303,7 +310,7 @@ def _search_semantic(
     ]
     params: list = list(ids)
     extra_where, extra_params = _build_extra_filters(
-        conn, time_from, time_to, persons, location, persons_mode
+        conn, time_from, time_to, persons, location, persons_mode, favorite_only
     )
     where.extend(extra_where)
     params.extend(extra_params)
@@ -326,6 +333,25 @@ def _search_semantic(
     return items
 
 
+_FAVORITE_RANK_BONUS = 3   # 收藏在最终结果里上浮约 3 位(轻加权,相关性仍为主,不置顶)
+
+
+def _apply_favorite_boost(items: list[dict], bonus: int = _FAVORITE_RANK_BONUS) -> list[dict]:
+    """对已按相关性/时间排好的结果做"收藏轻加权":收藏照片在原排名上上浮 bonus 位。
+
+    用 (原下标 - bonus*favorite) 作排序键、原下标兜底 → 收藏小幅靠前,
+    但不会把明显更相关的非收藏照片挤到后面(差距 ≤ bonus)。
+    """
+    if not items:
+        return items
+    keyed = [
+        ((i - bonus) if it.get("favorite") else i, i, it)
+        for i, it in enumerate(items)
+    ]
+    keyed.sort(key=lambda t: (t[0], t[1]))
+    return [it for _, _, it in keyed]
+
+
 def search_photos(
     conn: sqlite3.Connection,
     query: Optional[str] = None,
@@ -335,6 +361,7 @@ def search_photos(
     persons: Optional[list[str]] = None,
     persons_mode: str = "OR",
     location: Optional[str] = None,
+    favorite_only: bool = False,
     limit: int = 80,
     offset: int = 0,
 ) -> dict:
@@ -349,17 +376,20 @@ def search_photos(
         persons:          人名或 cluster_id 列表
         persons_mode:     'OR'(默认,任一在)/ 'AND'(都在同一张)
         location:         formatted_address 子串(LIKE,内部自动拆滑窗)
+        favorite_only:    True → 只返 Apple 收藏照片
         limit/offset:     分页(语义路径忽略 offset)
 
     Returns:
         { "total": int, "items": [...] }
     """
     fts_result = _search_fts(
-        conn, query, time_from, time_to, persons, location, limit, offset, persons_mode
+        conn, query, time_from, time_to, persons, location, limit, offset,
+        persons_mode, favorite_only,
     )
 
     # 没 query 或 offset>0(翻页)→ 不跑语义,行为同纯 FTS 不变
     if not query or not query.strip() or offset > 0:
+        fts_result["items"] = _apply_favorite_boost(fts_result["items"])
         return fts_result
 
     # 收集所有要跑的 query(主 + 扩词)
@@ -379,7 +409,8 @@ def search_photos(
     sem_results_per_query: list[list[dict]] = []
     for q in queries:
         sem_items = _search_semantic(
-            conn, q, time_from, time_to, persons, location, limit * 3, persons_mode
+            conn, q, time_from, time_to, persons, location, limit * 3,
+            persons_mode, favorite_only,
         )
         sem_results_per_query.append(sem_items)
         for it in sem_items:
@@ -390,7 +421,8 @@ def search_photos(
     # 扩词 fts 也跑(短词 LIKE 在扩词里通常命中具体名 — "连衣裙" 字面命中)
     fts_results_per_exp: list[list[dict]] = []
     for q in queries[1:]:   # 跳过主 query(上面已跑)
-        r = _search_fts(conn, q, time_from, time_to, persons, location, limit, 0, persons_mode)
+        r = _search_fts(conn, q, time_from, time_to, persons, location, limit, 0,
+                        persons_mode, favorite_only)
         fts_results_per_exp.append(r["items"])
         for it in r["items"]:
             if it["photo_id"] not in seen_ids:
@@ -406,4 +438,5 @@ def search_photos(
     if time_from or time_to:
         merged.sort(key=lambda it: it.get("captured_at") or "", reverse=True)
         merged = merged[:limit]
+    merged = _apply_favorite_boost(merged)
     return {"total": max(fts_result["total"], len(seen_ids)), "items": merged}
