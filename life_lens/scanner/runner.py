@@ -195,14 +195,22 @@ def process_pending_for_run(
     # 把 run 状态置 running
     conn.execute("UPDATE scan_runs SET status='running', finished_at=NULL WHERE run_id=?", (run_id,))
 
-    # 重建 ref_cache:重新遍历 source(几十万张几分钟,可接受)
+    # 重建 ref_cache:重新遍历 source。
+    # 只有 fs source 的 photo_id 依赖 content_hash(读首尾各 64KB);Apple source
+    # photo_id = uuid,算 hash 纯属浪费 — 11 万张 × 128KB ≈ 14GB 无效 IO,
+    # 是 resume 卡几分钟的主因,跳过后只剩 osxphotos 整库加载(无法避免)。
+    with progress.lock:
+        progress.phase = "enqueueing"   # 复用前端"正在遍历图片库"提示
     ref_cache: dict[str, PhotoRef] = {}
     for ref in source.iter_photos():
-        try:
-            chash = ident.content_hash(ref.original_path)
-        except Exception:
-            continue
-        pid = ident.photo_id_for(ref.source_id, ref.source_ref, chash)
+        if ref.source_id.startswith("fs:"):
+            try:
+                chash = ident.content_hash(ref.original_path)
+            except Exception:
+                continue
+            pid = ident.photo_id_for(ref.source_id, ref.source_ref, chash)
+        else:
+            pid = ref.source_ref
         ref_cache[pid] = ref
 
     final_status = "completed"

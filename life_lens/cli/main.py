@@ -28,7 +28,10 @@ def main(argv=None):
 
     # 默认子命令:serve(也是无 cmd 时的默认行为)
     serve_p = sub.add_parser("serve", help="启动 web GUI(默认行为)")
-    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--host", default=None,
+                         help="监听地址。不传时读 config.json 的 serve.host,再否则 0.0.0.0。"
+                              "内网能否访问由配置页「内网访问」开关控制(默认关,gate 全拒),"
+                              "监听 0.0.0.0 只是让开关能即时生效不用重启")
     serve_p.add_argument("--port", type=int, default=7878)
     serve_p.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
 
@@ -73,7 +76,14 @@ def main(argv=None):
 
     if cmd == "serve":
         from ..web.server import run
-        host = getattr(args, "host", "127.0.0.1")
+        # host 解析:CLI 显式传参 > config.json serve.host(高级 override,
+        # 比如硬锁 127.0.0.1 彻底不监听内网)> 默认 0.0.0.0。
+        # 默认 0.0.0.0 是安全的:LAN gate 总开关(serve.lan_chat)默认关,内网全 403;
+        # 监听放开只是为了配置页开关能即时生效,不用重启换 bind 地址
+        host = getattr(args, "host", None)
+        if not host:
+            from ..store import config as config_mod
+            host = (config_mod.load_config().get("serve") or {}).get("host") or "0.0.0.0"
         port = getattr(args, "port", 7878)
         open_browser = not getattr(args, "no_browser", False)
         run(host=host, port=port, root=root, open_browser=open_browser)

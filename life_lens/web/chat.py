@@ -191,11 +191,10 @@ def _build_round1_system(conn) -> str:
 ROUND2_SYSTEM = """你是用户的相册助手。系统已经根据用户的问题查到了一批照片(或聚合结果)。
 请用简洁中文回答用户的问题,引用具体照片时**用 `[photo:photo_id]` 标记**(系统会渲染成缩略图)。
 
-**关键铁律 — photo_id 必须完整复制**:
-- 查询结果里 photo_id 形如 `19D5A112-6F03-42D3-84F2-FB8B05F84326`(Apple uuid,36 字符带 4 个短横)
-  或 `d1303b8069f75394`(filesystem,16 位 hex)
-- **绝对不可截断、缩写、改写**!不要写 `[photo:19D5A112]`(8 位)— 这样前端找不到图
-- 直接 copy 完整字符串,标 [photo:完整id] 即可
+**关键铁律 — photo_id 必须原样复制**:
+- 查询结果里 photo_id 是短编码(形如 `19D5A112-6` 约 10 字符,或 `d1303b8069`)
+- **必须逐字符 copy 结果里给的 id,绝对不可自己编造、改写、补长、再截短**
+- 只能引用查询结果里真实存在的 id — 凭"印象"写一个看起来合法的 id = 幻觉,前端会丢弃
 
 风格:
 - 直接给答案,不要"好的,根据查询结果..."这种开头
@@ -205,6 +204,8 @@ ROUND2_SYSTEM = """你是用户的相册助手。系统已经根据用户的问�
 
 **引用前必做的轻量校验**(防止 hybrid 召回宽误塞):
 - 系统检索是宽召回(可能返几十张候选,不一定每张都真符合用户问题)
+- 候选可能带 `match` 字段:`literal` = 关键词字面命中(强证据);`semantic` = 仅语义
+  向量相近(**弱候选,大概率是凑数的**,可快速略读、不符合直接跳过)
 - 引用每张照片**前**,内心快速读一遍它的 `description` + `tags` + `objects` + `scene`,
   判断**是否真符合用户问题的核心意图**
 - 不符合 → 不引用(哪怕它进了候选列表)
@@ -264,6 +265,77 @@ def _extract_json(text: str) -> Optional[dict]:
 
 
 _LIMIT_HARD_CAP = 200   # Round 2 LLM context 保护:每条 item 约 200-400 token,200 张 ≈ 40-80k 安全在主流 64k+ 模型内
+
+_SHORT_ID_BASE_LEN = 10   # Round 2 prompt 里 photo_id 的短前缀长度(碰撞自动加长)
+
+
+def _short_id_map(full_ids: list) -> dict:
+    """full_id → 短前缀映射(基础 10 位,结果集内碰撞则整体加长)。
+
+    给 Round 2 prompt 瘦身用:36 字符 Apple uuid ≈ 15 token/个,候选 150 条 + LLM 回答
+    复述 ≈ 数千 token 纯浪费。前端 _fixPhotoId 本来就按 candidates 做前缀唯一补全,
+    短 id 直接复用该机制;服务端 done 帧另行扩回完整 id(_expand_photo_ids)。
+    """
+    uniq = [fid for fid in dict.fromkeys(full_ids) if fid]
+    n = _SHORT_ID_BASE_LEN
+    while True:
+        shorts = {fid: fid[:n] for fid in uniq}
+        if len(set(shorts.values())) == len(shorts):
+            return shorts
+        n += 4
+        if n >= max((len(f) for f in uniq), default=0):
+            return {fid: fid for fid in uniq}
+
+
+def _collect_full_ids(tool_result: dict) -> list:
+    ids = [it.get("photo_id") for it in (tool_result.get("items") or [])]
+    for pl in tool_result.get("places") or []:
+        ids.extend(pl.get("sample_photo_ids") or [])
+    return [i for i in ids if i]
+
+
+def _slim_for_llm(tool_result: dict, id_map: dict) -> dict:
+    """给 Round 2 prompt 的瘦身副本(SSE result 帧 / chat_log 仍用完整 raw):
+    - 去空字段(null / "" / [] / false)— LLM 不需要看 "scene": null
+    - photo_id / sample_photo_ids 换短前缀
+    其余结构原样,不截 description(它是"引用前轻量校验"的依据)。
+    """
+    def slim_dict(d: dict) -> dict:
+        out = {}
+        for k, v in d.items():
+            if v is None or v == "" or v == [] or v is False:
+                continue
+            if k == "photo_id":
+                v = id_map.get(v, v)
+            elif k == "sample_photo_ids":
+                v = [id_map.get(i, i) for i in v]
+            out[k] = v
+        return out
+
+    slimmed = dict(tool_result)
+    if tool_result.get("items"):
+        slimmed["items"] = [slim_dict(it) for it in tool_result["items"]]
+    if tool_result.get("places"):
+        slimmed["places"] = [slim_dict(pl) for pl in tool_result["places"]]
+    return slimmed
+
+
+def _expand_photo_ids(short_ids: list, full_ids: list, id_map: dict) -> list:
+    """LLM 回答里抠出的(短)id → 完整 id。顺序:短映射反查 → 完整 id 直接命中 →
+    唯一前缀匹配 → 原样保留(前端 _fixPhotoId 仍有最后一道兜底)。"""
+    rev = {s: f for f, s in id_map.items()}
+    full_set = set(full_ids)
+    out = []
+    for sid in short_ids:
+        if sid in rev:
+            out.append(rev[sid])
+            continue
+        if sid in full_set:
+            out.append(sid)
+            continue
+        hits = [f for f in full_set if f.startswith(sid)]
+        out.append(hits[0] if len(hits) == 1 else sid)
+    return list(dict.fromkeys(out))
 
 def _dispatch(conn, action: str, args: dict) -> dict:
     """执行工具调用,返回结果 dict(只含与回答相关的精简字段)。"""
@@ -362,10 +434,15 @@ def chat(request: Request, body: dict = Body(...)) -> StreamingResponse:
 
             # ---- Round 2: 出回答 ----
             yield _sse("phase", {"stage": "answering"})
+            # 瘦身副本只进 LLM prompt(compact dumps + 去空字段 + 短 id),
+            # SSE result 帧 / chat_log 仍是完整 raw — 前端缩略图/候选补全不受影响
+            full_ids = _collect_full_ids(tool_result)
+            id_map = _short_id_map(full_ids)
+            slim_result = _slim_for_llm(tool_result, id_map)
             r2_prompt = (
                 f"用户问题: {question}\n\n"
                 f"你调用了 {plan['action']}({json.dumps(plan.get('args') or {}, ensure_ascii=False)})\n\n"
-                f"查询结果:\n```json\n{json.dumps(tool_result, ensure_ascii=False, indent=2)}\n```\n\n"
+                f"查询结果:\n```json\n{json.dumps(slim_result, ensure_ascii=False, separators=(',', ':'))}\n```\n\n"
                 "请基于以上结果用中文回答用户。引用具体照片时插入 [photo:photo_id] 标记。"
             )
             answer_buf = []
@@ -373,10 +450,12 @@ def chat(request: Request, body: dict = Body(...)) -> StreamingResponse:
                 answer_buf.append(chunk)
                 yield _sse("chunk", chunk)
 
-            # 抠出回答里被 [photo:xxx] 引用的 photo_id,前端用来 fetch 缩略图
+            # 抠出回答里被 [photo:xxx] 引用的(短)id,扩回完整 id 再发 done 帧 —
+            # 前端"未引用候选"折叠区按完整 id 比对,直接发短 id 会全判未引用。
             # 注意:Apple uuid 含短横,正则要带 '-'(filesystem hash 没短横也匹配)
             full = "".join(answer_buf)
-            photo_ids = list(dict.fromkeys(re.findall(r"\[photo:([A-Za-z0-9_-]+)\]", full)))
+            cited_short = list(dict.fromkeys(re.findall(r"\[photo:([A-Za-z0-9_-]+)\]", full)))
+            photo_ids = _expand_photo_ids(cited_short, full_ids, id_map)
             yield _sse("done", {"photo_ids": photo_ids})
             _log_chat(root, question, provider_id, plan, tool_result, full, photo_ids, error=None)
         except Exception as e:

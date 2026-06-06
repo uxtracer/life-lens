@@ -23,6 +23,13 @@ v0.4 起 **删除** `kind="claude-p"`(本地 subprocess `claude -p`)— 它依�
 
 旧格式(单 provider)仍兼容:`"llm": { "provider": "openai-compat", "model": "...", "api_key": "...", "base_url": "..." }`。
 
+**本地 server(LM Studio / Ollama / vLLM)注意**:
+- provider 可加 `"extra_body": {...}`,原样并进 request body。典型用途:关 thinking —
+  `"extra_body": {"chat_template_kwargs": {"enable_thinking": false}}`(vLLM / 部分 server 约定)。
+- thinking 模型把推理链以 `<think>...</think>` 塞进 content 的,本层自动剥掉(`_strip_think*`),
+  但推理 token 照样耗时间,**强烈建议在 server 侧关掉 think 模式**。
+- SSE 响应头不带 charset 时 requests 默认按 latin-1 解,中文全花 — 本层已强制 `r.encoding="utf-8"`。
+
 **迁移**:若旧 config 含 `kind="claude-p"` 的 provider,启动时**自动跳过 + 日志 WARN**,
 让用户改填 RESTful API key。CHANGELOG v0.4 有说明。
 
@@ -33,7 +40,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Iterator, Optional
+import re
+from typing import Iterable, Iterator, Optional
 
 import requests
 
@@ -163,6 +171,68 @@ def get_provider_info(provider_id: Optional[str] = None) -> dict:
 
 
 # ============================================================
+# thinking 模型兜底:剥 <think>...</think>
+# ============================================================
+# qwen3 等 thinking 变体经 openai-compat(LM Studio / Ollama / vLLM)会把推理链
+# 以 <think>...</think> 塞进 content。不剥的话:Round 1 JSON 被推理文本环绕
+# (_extract_json 多半还能救),Round 2 流式会把整段推理直接吐给用户。
+# 注意这只是兜底 — 推理 token 照样花时间,根治是 server 侧关 think(见模块 docstring)。
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _strip_think(text: str) -> str:
+    """非流式版:去掉 <think>...</think> 块;没闭合(被截断)时丢掉 <think> 之后全部。"""
+    out = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    i = out.find(_THINK_OPEN)
+    if i >= 0:
+        out = out[:i]
+    return out.lstrip("\n")
+
+
+def _strip_think_stream(chunks: Iterable[str]) -> Iterator[str]:
+    """流式版:增量过滤 <think> 块,tag 跨 chunk 断开也能识别(尾部留半个 tag 待定)。"""
+    pend = ""           # 未决文本(可能以半个 tag 结尾)
+    in_think = False
+    for chunk in chunks:
+        pend += chunk
+        out = ""
+        while pend:
+            if in_think:
+                i = pend.find(_THINK_CLOSE)
+                if i < 0:
+                    # 整段都在思考块里,只留可能是半个闭 tag 的尾巴
+                    pend = pend[-(len(_THINK_CLOSE) - 1):]
+                    break
+                pend = pend[i + len(_THINK_CLOSE):]
+                in_think = False
+            else:
+                i = pend.find(_THINK_OPEN)
+                if i < 0:
+                    # 尾部若是半个开 tag 则留住待下个 chunk,其余放行
+                    keep = 0
+                    for k in range(min(len(_THINK_OPEN) - 1, len(pend)), 0, -1):
+                        if pend.endswith(_THINK_OPEN[:k]):
+                            keep = k
+                            break
+                    if keep:
+                        out += pend[:-keep]
+                        pend = pend[-keep:]
+                    else:
+                        out += pend
+                        pend = ""
+                    break
+                out += pend[:i]
+                pend = pend[i + len(_THINK_OPEN):]
+                in_think = True
+        if out:
+            yield out
+    if pend and not in_think:
+        yield pend
+
+
+# ============================================================
 # Public API
 # ============================================================
 
@@ -188,7 +258,11 @@ def call_llm(system: str, user: str, stream: bool = False,
             f"未知 LLM kind: {kind!r}。v0.4 起只支持 'openai-compat'(RESTful API)。"
             f"请到 Web 配置页改 provider {pid!r}。"
         )
-    yield from _openai_compat(system, user, cfg, stream=stream, temperature=temperature)
+    raw = _openai_compat(system, user, cfg, stream=stream, temperature=temperature)
+    if stream:
+        yield from _strip_think_stream(raw)
+    else:
+        yield _strip_think("".join(raw))
 
 
 # ============================================================
@@ -216,6 +290,11 @@ def _openai_compat(system: str, user: str, cfg: dict, stream: bool,
     }
     if temperature is not None:
         body["temperature"] = temperature
+    # provider 级透传(本地 server 关 thinking 等):
+    # "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}
+    extra = cfg.get("extra_body")
+    if isinstance(extra, dict):
+        body.update(extra)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -243,6 +322,9 @@ def _openai_compat(system: str, user: str, cfg: dict, stream: bool,
     except Exception as e:
         raise RuntimeError(f"openai-compat stream call failed: {type(e).__name__}: {e}")
 
+    # SSE 永远是 UTF-8,但响应头不带 charset 时 requests 按 RFC 默认 latin-1 解,
+    # 中文全花(LM Studio 等本地 server 就不带)。强制 utf-8。
+    r.encoding = "utf-8"
     for raw_line in r.iter_lines(decode_unicode=True):
         if not raw_line:
             continue

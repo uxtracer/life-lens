@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <!-- viewport-fit=cover:iPhone 刘海/底部 home bar 区域也铺满,配合 safe-area-inset -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Life Lens 人生透镜</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+    /* ===== 移动端问相册页(LAN gate 给局域网设备的入口)=====
+       复用 style.css 的 chat-* / viewer 组件样式,这里只做整页布局覆盖:
+       全屏 flex 列(头部 / 滚动消息区 / 底部输入栏),手机 / iPad / 桌面窗口都适用 */
+    html, body { height: 100%; }
+    body {
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;           /* dvh:iOS Safari 地址栏收起/展开不跳动;旧浏览器回落上面的 100% */
+        overflow: hidden;
+    }
+    .m-header {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        padding-top: calc(10px + env(safe-area-inset-top));
+        background: #fff;
+        border-bottom: 1px solid #e5e5e5;
+    }
+    .m-header h1 { font-size: 16px; margin: 0; flex: 1; white-space: nowrap; }
+    .m-header select { max-width: 40vw; padding: 4px 6px; font-size: 13px; }
+    #chat-provider-meta { display: none; }   /* chat.js 需要该元素存在,移动端不展示 */
+
+    #chat-log.chat-log {
+        flex: 1;
+        min-height: 0;            /* flex 子元素要可收缩才能滚动 */
+        max-height: none;         /* 覆盖桌面的 60vh 上限 */
+        border: none;
+        border-radius: 0;
+        margin-bottom: 0;
+        padding: 14px;
+        -webkit-overflow-scrolling: touch;
+    }
+    #chat-empty-hint { color: #888; font-size: 13px; }
+
+    form.chat-form {
+        flex: none;
+        padding: 10px 12px;
+        padding-bottom: calc(10px + env(safe-area-inset-bottom));
+        background: #fff;
+        border-top: 1px solid #e5e5e5;
+    }
+    .chat-form input[type=text] { font-size: 16px; }   /* <16px 时 iOS 聚焦会自动放大页面 */
+
+    /* viewer 占满小屏 */
+    .viewer-content { max-width: 96vw; padding: 12px; }
+    #viewer-img { max-width: 92vw; max-height: 62vh; }
+    .viewer-meta { max-width: 92vw; }
+
+    /* 缩略图在窄屏一行 3 张左右 */
+    @media (max-width: 480px) {
+        .chat-photo-wrap { width: 102px; height: 102px; }
+    }
+    </style>
+</head>
+<body>
+<header class="m-header">
+    <h1>📷 Life Lens 人生透镜</h1>
+    <select id="chat-provider" title="对话模型"></select>
+    <span id="chat-provider-meta"></span>
+</header>
+
+<div id="chat-log" class="chat-log">
+    <div id="chat-empty-hint">用自然语言问你的相册。例:“小明去年去过哪些城市”、“打雪仗的照片”、“穿裙子的照片”。</div>
+</div>
+
+<form id="chat-form" class="chat-form">
+    <input type="text" id="chat-input" placeholder="问点什么..." autocomplete="off">
+    <button type="submit" id="chat-send">发送</button>
+</form>
+
+<!-- Photo Viewer modal(chat.js 共用;「完整详情 →」按钮在无 browse tab 的本页自动隐藏) -->
+<div id="photo-viewer" class="viewer hidden">
+    <div class="viewer-backdrop"></div>
+    <div class="viewer-content">
+        <img id="viewer-img" title="1024px 预览(非原图),下载原图请用下方按钮">
+        <div class="viewer-meta">
+            <div class="viewer-caption"></div>
+            <div class="viewer-desc"></div>
+        </div>
+        <div class="viewer-actions">
+            <a id="viewer-download" download>下载原图</a>
+            <button id="viewer-detail">完整详情 →</button>
+            <button id="viewer-close">关闭</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/chat.js"></script>
+<script>
+    // 首问后清掉空态提示
+    refreshChatProviders();
+    document.getElementById('chat-form').addEventListener('submit', () => {
+        const hint = document.getElementById('chat-empty-hint');
+        if (hint) hint.remove();
+    }, { once: true });
+</script>
+</body>
+</html>

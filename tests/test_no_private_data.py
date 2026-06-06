@@ -21,8 +21,10 @@ PRIVATE_COMPANIES = ["斯伦贝谢"]
 
 # 文件类型
 INCLUDE = ["*.py", "*.md", "*.yaml", "*.json", "*.html", "*.css", "*.js", "*.sh", "*.toml"]
+# .claude:Claude Code 本地配置(settings.local.json 会记含绝对路径的权限条目),
+# publish.sh rsync 排除整个目录,到不了公开仓 — 和那边的 exclude 清单保持对齐
 EXCLUDE_DIRS = [".git", ".venv_lens", "sample", "seeds", "seedface", ".cache",
-                "node_modules", "export", "backups", "chat_log", "reports"]
+                "node_modules", "export", "backups", "chat_log", "reports", ".claude"]
 # 跟踪文件白名单(出现真名/路径不算泄漏):
 #   - tests/eval/ground_truth.yaml:私有评测,publish.sh rsync 会挡公开版
 #   - scripts/publish.sh:把名字当 grep pattern 内容,这是工具本职

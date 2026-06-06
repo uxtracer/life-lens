@@ -19,7 +19,7 @@
 - **Phase 3** ✅:Apple Photos source + iCloud 备份脚本 + cities 地图;**未做**:sidecar JSON 导出、MCP server(Py ≥ 3.10)、视频
 - **Phase 4** ✅:语义向量(bge-small-zh + fastembed) + hybrid + RRF + LLM query expansion + chat jsonl 日志
 - **Phase 5** ✅:开源发布(脱敏 + db schema_version 自动备份 + A 层 pytest + publish.sh + 5-tab UI + RESTful 统一砍 claude-p + install.sh 一行 + config 跟 `--root`)
-- **Phase 6** 🟢:语义索引 inline 化 + Web 端补建/全量重建兜底 + `lens update` 子命令 + install.sh 端口占用先 kill 再启 + **album 信号**(本地 LLM 解析相册名 → 无 GPS 老照片补城市 + 事件关键词进 vision.tags)
+- **Phase 6** 🟢:语义索引 inline 化 + Web 端补建/全量重建兜底 + `lens update` 子命令 + install.sh 端口占用先 kill 再启 + **album 信号**(本地 LLM 解析相册名 → 无 GPS 老照片补城市 + 事件关键词进 vision.tags)+ **LAN 分权**(配置页开关控制内网「问相册」移动页,热生效,见「隐私边界」)
 
 ## 推荐工作流(重要)
 
@@ -76,6 +76,17 @@ Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`
 | 查询返回的精简结果 | ✅ | Round 2 prompt(发描述文本 + photo_id,**不发图本身**) |
 
 判断标准:**外发数据能否让接收方还原"这是哪张照片"**?GPS 单独发不行,但 GPS + 时间 + 缩略图组合就行 → 所以缩略图字节不能外发。
+
+### LAN 分权(局域网 ≠ 外发,但也不是本机)
+
+监听**始终 0.0.0.0**,按**来源 IP 分权**(`web/server.py` 的 `lan_gate` 中间件),两层控制:
+
+1. **总开关** config `serve.lan_chat`(默认**关**)— 关闭时内网一律 403。配置页 Card 6「📱 内网访问」可切;**gate 每次远程请求热读 config,翻开关即时生效不用重启**(这正是"监听始终 0.0.0.0"的原因:bind 地址改不了,gate 行为可以热改)。开关端点 `GET/POST /api/config/lan-chat` 本身不在白名单 — 内网设备不能给自己开门
+2. **白名单**(`_LAN_ALLOW`):开启后局域网设备访问 `/` 拿到移动端问相册页(`chat.html`),只放行 `POST /api/chat`、`GET /api/thumb|original|photo/{id}`(仅单段路径)、`GET /api/llm-providers|llm-info`、`/static/*`、`/health`,其余 403。配置/扫描/面孔/浏览及一切写操作内网不可见
+
+本机(loopback)永远全功能,不受开关影响。设计决定(2026-06,用户确认):内网可看缩略图 + 原图下载(自己的设备);**不加口令**(信任家庭局域网);开关默认关 = 安全 opt-in。host 仍可用 CLI `--host` 或 config `serve.host` 硬 override(如锁回 127.0.0.1 彻底不监听内网,代价是改了要重启)。
+
+⚠️ **`@app.middleware("http")` 不覆盖 WebSocket** — 将来若加 ws 端点,它会完全绕过 lan_gate(静默旁路)。加 ws 前必须给 gate 补 websocket 维度(或 ASGI 层拦截)。已知接受的暴露面:开关关闭时内网请求仍会走到 uvicorn/h11 的 HTTP 解析(连接能建立,403 在中间件层)— 比绑 127.0.0.1 多出"HTTP 解析层 pre-auth 漏洞"这一层理论风险,家庭场景接受。测试在 `tests/test_lan_gate.py`(TestClient 默认 client host 是 `'testclient'`,`_is_local_client` 视作本机 — 否则全部 API 测试 403;模拟远程显式传 `client=(ip, port)`;config 跟 env `LIFE_LENS_ROOT` 走,fixture 指 tmp_path 隔离真实配置)。
 
 ## 不要做的事
 
@@ -138,10 +149,12 @@ reprocess 把 jobs 行的 `run_id` 改成新 run_id 让进度可查;副作用是
 ### LLM 偏好截短 photo_id 到 8 位
 
 部分模型(非顶级)截 git-short-hash 风格 → `<img src="/api/thumb/19D5A112">` 404。**两层防御**:
-1. ROUND2_SYSTEM 写"photo_id 必须完整复制" + 示例 — 减少但不消除
+1. ROUND2_SYSTEM 写"id 必须原样复制" + 示例 — 减少但不消除
 2. **前端 candidates 前缀补全**(`app.js::_fixPhotoId`):取 result 帧的所有 candidate id 做集合,LLM 写的 id 不在 → 前缀唯一匹配自动补全
 
 **铁律:只靠 prompt 教不稳,关键不变量必须程序层守住**。
+
+**2026-06 演进**:Round 2 瘦身后服务端**主动**发 10 位短前缀给 LLM(`_short_id_map` 结果集内构造唯一,碰撞自动加长),前端靠同一套 `_fixPhotoId` 还原 — "id 不能改"的不变量没破,只是从"求 LLM 抄对 36 字符"换成"程序层保证唯一前缀可还原"。**前提**:SSE result 帧必须始终携带完整 raw id(candidates 是还原的依据,瘦身只瘦 LLM prompt 这一份);LLM 把 10 位再截短到 8 位仍能唯一还原,幻觉 id 照旧 null 丢弃。
 
 ### LLM 还会**伪造**完整格式合法的 UUID(脑补) ⚠️⚠️
 
@@ -164,6 +177,10 @@ bge-small-zh 把整段 200 字 description 压成 512 维。短 query("裙子" 2
 2. **LLM query expansion**: Round 1 LLM 主动扩词(`"裙子" → ["连衣裙","长裙","短裙"]`),FTS 路径 `LIKE %连衣裙%` 100% 字面命中
 
 教训:**dense + sparse 互补是标准做法**(dense 解语义,sparse 解字面)。
+
+### dense brute-force top-K 永远返 K 条 → 稀疏 query 全是凑数噪音 ⚠️
+
+用户问"张三哭的样子",persons 是硬过滤、query 只影响排序 → 返回 150 张全有张三但只有 3 张字面含"哭"(库里就这么多),其余 147 张是语义路径按余弦"最近的 K 条"硬凑的(分数 0.32-0.38 纯噪音水平)——再喂给 Round 2 烧 35k tokens 逐条校验。**对策(2026-06)**:`_search_semantic` 加余弦下限 `SEMANTIC_MIN_SCORE=0.42`。标定数据(bge-small-zh):稀疏 query 真命中 ≥0.48、正常场景词 top150 ≥0.45、噪音底 ≤0.38,两侧余量 ~0.05。只砍语义路径,FTS 字面/扩词不受影响,最坏退化纯 FTS。实测"哭"case 候选 150→26 条、prompt -81%;海边/雪景等正常 query 满额不受影响。**换 embedding 模型必须重新标定**(方法:取稀疏 query 的字面真命中分数 vs top-K 噪音底分布,阈值取两者中间;标定注释在 `search.py::_search_semantic`)。
 
 ### LLM 优秀行为靠运气,要 prompt 显式化
 
@@ -208,6 +225,16 @@ Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/sho
 ### MCP Python ≥ 3.10(本机 venv 已是 3.13,不再受阻)
 
 `pip install mcp` 要 `Requires-Python >=3.10`。原先本机 venv 是 3.9 装不了;**2026-06 venv 升 3.13 后这条解除**(见上「macOS Tahoe」)。**当前**:web chat 仍走手写两轮 `web/llm.py` openai-compat tool loop,不依赖 MCP;要补 MCP server 现在环境已就绪。
+
+### 本地 openai-compat server(LM Studio)三连坑:latin-1 乱码 / think 块 / 上下文太小 ⚠️
+
+用 LM Studio 跑 chat,Round 1 全对、Round 2 全坏(空回答 / 乱码 / 400),三个独立原因:
+
+1. **SSE 响应头不带 charset → requests 按 latin-1 解** → 中文全花(`ç¸å...`)。DeepSeek 带 `charset=utf-8` 所以从没暴露。修复:`llm.py` 流式路径强制 `r.encoding="utf-8"`(SSE 规范本就只有 UTF-8)。
+2. **thinking 变体把推理链 `<think>...</think>` 塞 content**(和 vision 侧 qwen3-vl thinking 同款坑)。修复:`llm.py` `_strip_think` / `_strip_think_stream` 程序层剥掉(tag 跨 chunk 也处理);provider 可配 `extra_body`(如 `chat_template_kwargs.enable_thinking=false`)透传给 server。但剥只是兜底,推理 token 照样耗时,**根治在 server 侧关 think**。
+3. **Round 2 prompt 塞 80-200 张候选 JSON ≈ 30-80k token,LM Studio 默认装载 ctx 4096** → 超限被截断(空回答)或直接 400。**代码救不了,用户侧装载模型时 ctx 开到 ≥32k**。"同模型跑别的 agent 很好"不代表这里能用 — 别的 agent prompt 短。
+
+诊断入口:`~/.life_lens/chat_log/*.jsonl` 按 provider 字段过滤,plan/answer/error 一目了然。
 
 ### album 名解析:8B 城市猜测不可靠,先 curate 缓存再回填 ⚠️
 
@@ -257,6 +284,8 @@ Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/sho
 
 **Web Chat**(主入口,`web/chat.py`):`POST /api/chat` SSE,两轮 LLM(`web/llm.py` 抽象,Phase 5 只剩 `openai-compat` 一个 kind)。Round 1 出 JSON `{action, args, rationale}`,action ∈ `search_photos / places_visited / counts_by_year`;Python `_dispatch` 调 `query/`;Round 2 流式中文回答 + `[photo:xxx]`。SSE 帧:`phase / planned / result / chunk / done / error`。
 
+**Round 2 prompt 瘦身**(2026-06,input token 优化):进 LLM 的查询结果走 `_slim_for_llm` 副本 — compact dumps(去 indent)+ 去空字段(null/""/[]/false)+ **photo_id 换 10 位短前缀**(`_short_id_map`,结果集内碰撞自动加长)。宽搜 150 条 ≈ 50k → 37k tokens。**SSE result 帧和 chat_log 仍是完整 raw**(前端缩略图/`_fixPhotoId` 前缀补全依赖完整 id);`done` 帧的 photo_ids 服务端 `_expand_photo_ids` 扩回完整 id(否则前端"未引用候选"按完整 id 比对会全判未引用)。短 id 直接复用前端既有的前缀补全机制,不是新协议。
+
 **LLM provider 配置**(`~/.life_lens/config.json`):
 
 ```jsonc
@@ -275,7 +304,7 @@ Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/sho
 
 热读取(每次调用读 JSON),改 config 不需要重启。旧 `kind="claude-p"` 启动时忽略 + WARN。Env `LIFE_LENS_LLM_PROVIDER/MODEL/API_KEY/BASE_URL` 可临时覆盖。
 
-**query/ 共享层**(三轨共用):`search.search_photos(query, time_from, time_to, persons[], persons_mode, location, query_expansions, favorite_only, limit)` hybrid FTS5+sem RRF / `aggregate.places_visited(year?)` / `aggregate.counts_by_year()`。`favorite_only=True` 走 `photos.favorite` 生成列(源自 `derived.favorite` ← Apple 收藏);收藏在结果里**轻加权**(`_apply_favorite_boost` 上浮 ~3 位,不置顶)。browse `/api/photos?favorite_only=true` + ⭐ 角标 + "只看收藏" 开关同源。
+**query/ 共享层**(三轨共用):`search.search_photos(query, time_from, time_to, persons[], persons_mode, location, query_expansions, favorite_only, limit)` hybrid FTS5+sem RRF / `aggregate.places_visited(year?)` / `aggregate.counts_by_year()`。带 query 时每条 item 标 `match: literal|semantic`(literal=任一 FTS/LIKE 路径字面命中,semantic=仅向量相近的弱候选)— Round 2 prompt 据此分层校验。语义路径有余弦下限 `SEMANTIC_MIN_SCORE=0.42`(bge-small-zh 实测标定,见踩过的坑;换 embedding 模型要重标)。`favorite_only=True` 走 `photos.favorite` 生成列(源自 `derived.favorite` ← Apple 收藏);收藏在结果里**轻加权**(`_apply_favorite_boost` 上浮 ~3 位,不置顶)。browse `/api/photos?favorite_only=true` + ⭐ 角标 + "只看收藏" 开关同源。
 
 **MCP server**:推迟(Py ≥ 3.10)。
 
@@ -358,7 +387,9 @@ sqlite3 ~/.life_lens/lens.db "SELECT photo_id, json_extract(exif, '$.captured_at
 | 目录 | 用途 | git remote |
 |---|---|---|
 | `~/claude/life_lens/` | 私有开发主战场,monorepo 子目录 | uxtracer/claude(私有) |
-| `~/claude/life_lens-public/` | 公开镜像 working copy(独立 git) | uxtracer/life-lens(公开) |
+| `~/claude/life_lens-public/` | 公开镜像 working copy(独立 git,**已加 monorepo .gitignore**) | uxtracer/life-lens(公开) |
+
+`publish.sh` 的 SRC 从脚本自身位置推导,私有仓挪目录不用改脚本(2026-06 已两次搬迁验证);DST 固定 `~/claude/life_lens-public`,丢了重新 `git clone` 即可(镜像不保留私有 history,本就无状态)。**注意**:2026-06 monorepo 搬到 `~/claude/` 后,公开镜像成了 monorepo 根下的兄弟目录,靠根 `.gitignore` 的 `life_lens-public/` 行隔离。
 
 发版:`bash scripts/publish.sh`(rsync `--delete` + 12 exclude + 隐私 grep + pytest A 层),**不自动 push**,提示人工 `cd` 镜像目录 commit + push。
 
@@ -386,7 +417,10 @@ life_lens/store/schema.sql     改要 bump db.py::SCHEMA_VERSION,启动自动备
 life_lens/store/config.py      config.json 原子写 + chmod 600 + 单字段 update
 life_lens/web/llm.py           openai-compat(claude-p 已删,旧 config 启动忽略 + WARN)
 life_lens/web/chat.py          SSE 两轮 LLM tool loop + jsonl 日志
-life_lens/web/static/          vanilla HTML/JS:5-tab + 配置卡片 + photo_id 前缀补全
+life_lens/web/server.py        FastAPI app + LAN gate(_LAN_ALLOW 白名单,内网只开问相册)
+life_lens/web/static/          vanilla HTML/JS。index.html(桌面 5-tab)+ chat.html(移动端问相册)
+                               共用 chat.js(api/viewer/SSE/前缀补全)— index.html 必须先 chat.js 后 app.js
+                               (app.js 依赖 chat.js 的全局,两边不要重复声明)
 life_lens/cli/main.py          argparse,不要换 click/typer
 scripts/publish.sh             私有 → 公开镜像 rsync + 隐私 grep + pytest + 提示人工 push
 scripts/build_embeddings.py    回填 photo_embeddings(Phase 6 inline 化后只兜底用)

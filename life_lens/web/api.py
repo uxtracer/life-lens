@@ -1282,6 +1282,47 @@ def config_set_vision(body: dict = Body(...)):
     return {"ok": True}
 
 
+def _guess_lan_ip():
+    """探测本机局域网 IP(给配置页显示手机访问 URL)。
+
+    UDP connect 不真发包,只查路由表选源地址;失败(无网络)返 None。
+    """
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return None
+
+
+@router.get("/config/lan-chat")
+def config_get_lan_chat(request: Request):
+    """内网「问相册」开关状态 + 手机访问 URL。"""
+    from ..store import config as cfg_store
+    ip = _guess_lan_ip()
+    port = request.url.port or 7878
+    return {
+        "enabled": cfg_store.lan_chat_enabled(),
+        "lan_url": f"http://{ip}:{port}" if ip else None,
+    }
+
+
+@router.post("/config/lan-chat")
+def config_set_lan_chat(body: dict = Body(...)):
+    """写内网「问相册」开关。gate 每次远程请求热读,即时生效不用重启。
+
+    本端点不在 LAN 白名单 — 内网设备不能给自己开门。
+    """
+    from ..store import config as cfg_store
+    enabled = bool((body or {}).get("enabled"))
+    cfg_store.update_lan_chat(enabled)
+    return {"ok": True, "enabled": enabled}
+
+
 @router.post("/config/amap-key")
 def config_set_amap_key(body: dict = Body(...)):
     """写 amap_key 到 ~/.life_lens/config.json。"""

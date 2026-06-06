@@ -14,6 +14,9 @@ from ..store import repo
 
 log = logging.getLogger(__name__)
 
+# 语义路径余弦下限(bge-small-zh 实测标定,见 _search_semantic 内注释;换模型要重标)
+SEMANTIC_MIN_SCORE = 0.42
+
 
 def _split_location_keywords(q: str) -> list[str]:
     """把 location 查询拆成多个候选关键词,任一命中即匹配。
@@ -298,6 +301,11 @@ def _search_semantic(
     except Exception as e:
         log.warning("semantic search failed: %s (will use FTS only)", e)
         return []
+    # 余弦下限:brute-force top-K 永远返 K 条,稀疏 query(库里几乎没有的内容,如"哭")
+    # 会拿一堆 0.32-0.38 的纯噪音凑数。实测 bge-small-zh:真命中 ≥0.48,正常场景词
+    # top150 ≥0.45,噪音底 ≤0.38 → 0.42 两侧都有余量。只砍语义路径,字面 FTS 不受影响,
+    # 最坏退化为纯 FTS 行为。换 embedding 模型要重新标定。
+    pairs = [(pid, s) for pid, s in pairs if s >= SEMANTIC_MIN_SCORE]
     if not pairs:
         return []
 
@@ -432,6 +440,14 @@ def search_photos(
     # RRF:每个路径(主 fts / 主 sem / 扩词 sem N / 扩词 fts N)的 rank 都贡献分数
     paths: list[list[dict]] = [fts_result["items"]] + sem_results_per_query + fts_results_per_exp
     merged = rrf_merge_multi(paths, k=60, limit=limit * 3 if (time_from or time_to) else limit)
+
+    # 标注候选来源:literal = 任一 FTS/LIKE 路径字面命中(强证据);
+    # semantic = 仅语义向量相近(弱候选,Round 2 LLM 据此快速分层校验)
+    literal_ids = {it["photo_id"] for it in fts_result["items"]}
+    for exp_items in fts_results_per_exp:
+        literal_ids.update(it["photo_id"] for it in exp_items)
+    for it in merged:
+        it["match"] = "literal" if it["photo_id"] in literal_ids else "semantic"
 
     # 用户明示了时间窗 → 时间信号是强意图(比如"最近 X"),合并后按 captured_at 倒序重排
     # 没时间窗 → 保留 RRF 相关性排序(用户问"海边"时不应该把最新一张排最前)

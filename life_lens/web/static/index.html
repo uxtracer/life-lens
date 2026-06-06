@@ -97,10 +97,25 @@
             </div>
         </div>
 
-        <!-- Card 5: 存储 -->
-        <div class="config-card" data-card="storage">
+        <!-- Card 5: 内网访问(问相册)-->
+        <div class="config-card" data-card="lan">
             <div class="config-card-head">
                 <span class="config-card-step">5</span>
+                <div class="config-card-title">
+                    <h3>📱 内网访问</h3>
+                    <p class="config-card-subtitle">让手机/iPad 在同一 Wi-Fi 下用「问相册」— 只开放问相册页,配置/扫描/浏览仍仅本机</p>
+                </div>
+                <span class="config-card-status" id="card-lan-status">⏳</span>
+            </div>
+            <div class="config-card-body" id="card-lan-body">
+                加载中……
+            </div>
+        </div>
+
+        <!-- Card 6: 存储 -->
+        <div class="config-card" data-card="storage">
+            <div class="config-card-head">
+                <span class="config-card-step">6</span>
                 <div class="config-card-title">
                     <h3>💾 存储</h3>
                 </div>
@@ -265,6 +280,8 @@
     </div>
 </div>
 
+<!-- chat.js 必须在 app.js 之前:定义 api/escapeHtml/openViewer 等共用全局 + 聊天链路 -->
+<script src="/static/chat.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

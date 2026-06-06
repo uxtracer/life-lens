@@ -111,6 +111,22 @@ def set_llm_default(provider_id: str) -> None:
     save_config(d)
 
 
+def lan_chat_enabled() -> bool:
+    """内网「问相册」开关(serve.lan_chat,默认关)。
+
+    web/server.py 的 lan_gate 每次远程请求热读 — 翻开关即时生效,不用重启
+    (监听始终 0.0.0.0,开关控制的是 gate 放不放行,不是 bind 地址)。
+    """
+    return bool((load_config().get("serve") or {}).get("lan_chat", False))
+
+
+def update_lan_chat(enabled: bool) -> None:
+    """写内网「问相册」开关,保留 serve 下其他字段(如 host override)。"""
+    d = load_config()
+    d.setdefault("serve", {})["lan_chat"] = bool(enabled)
+    save_config(d)
+
+
 def update_vision_config(endpoint: str, model: str) -> None:
     """更新本地视觉模型配置(Ollama endpoint + 模型名)。
 
