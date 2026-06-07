@@ -1323,6 +1323,28 @@ def config_set_lan_chat(body: dict = Body(...)):
     return {"ok": True, "enabled": enabled}
 
 
+@router.get("/config/chat-notes")
+def config_get_chat_notes():
+    """「问相册」背景知识(用户写给 LLM 的小名/人物关系/常用地点等)。"""
+    from ..store import config as cfg_store
+    return {"notes": cfg_store.chat_user_notes()}
+
+
+@router.post("/config/chat-notes")
+def config_set_chat_notes(body: dict = Body(...)):
+    """写「问相册」背景知识。chat.py 每次提问热读,保存即生效。
+
+    本端点不在 LAN 白名单 — 内网设备改不了(背景知识属于配置,仅本机)。
+    长度上限 4000 字:这段文字每次提问都进 prompt,防止误贴长文吃爆 token。
+    """
+    from ..store import config as cfg_store
+    notes = str((body or {}).get("notes") or "")
+    if len(notes) > 4000:
+        raise HTTPException(400, f"背景知识太长({len(notes)} 字 > 4000 上限),请精简")
+    cfg_store.update_chat_user_notes(notes)
+    return {"ok": True, "notes": cfg_store.chat_user_notes()}
+
+
 @router.post("/config/amap-key")
 def config_set_amap_key(body: dict = Body(...)):
     """写 amap_key 到 ~/.life_lens/config.json。"""

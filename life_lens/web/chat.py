@@ -98,7 +98,7 @@ ROUND1_SYSTEM_TEMPLATE = """你是一个相册查询调度器。用户会问一�
 **当前事实**(基于这些判断时间窗,不要用训练知识猜"最近/今年"是哪一年):
 - 今天日期:{today}
 - 相册照片实际时间范围:{photo_time_range}
-
+{user_notes_section}
 **模糊时间词解析约定**(用户没明示具体时长时遵守):
 - "最近" / "这段时间" / "近期" → **time_from = today 往前推 6 个月**(宽松,确保有照片可选)
 - "最近几天" / "这两天" → today 往前推 7 天
@@ -170,8 +170,29 @@ ROUND1_SYSTEM_TEMPLATE = """你是一个相册查询调度器。用户会问一�
 """
 
 
+def _round1_notes_section() -> str:
+    """配置页「问相册背景知识」→ Round 1 prompt 片段(空时返回空串)。
+
+    每次提问热读 config(和 LLM provider 同款模式),保存即生效。
+    核心作用:把用户问题里的别名/称谓换成库里真名 — persons 过滤按 persons 表
+    的 name 匹配(已有 ≥2 字子串模糊兜底,但"豆豆"↔"张三"这种别名只有靠背景知识)。
+    """
+    from ..store import config as cfg_store
+    notes = cfg_store.chat_user_notes()
+    if not notes:
+        return ""
+    return (
+        "\n**用户提供的背景知识**(用户在配置页亲自写的,可信度最高;"
+        "含小名/别名、人物关系、常用地点等):\n"
+        f"{notes}\n"
+        "- 用户问题里出现上述别名/称谓时,persons 参数必须换成背景知识里对应的真名"
+        "(库里人物按真名存,别名直接传会查不到)\n"
+        '- 问题里出现"家/老家/公司"等称谓地点时,location 参数用背景知识里对应的实际地名\n'
+    )
+
+
 def _build_round1_system(conn) -> str:
-    """动态拼 Round 1 prompt:注入今天日期 + db 照片时间范围。
+    """动态拼 Round 1 prompt:注入今天日期 + db 照片时间范围 + 用户背景知识。
     让 LLM 别基于训练 cutoff 猜"最近/今年/去年"。"""
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
@@ -186,7 +207,10 @@ def _build_round1_system(conn) -> str:
         time_range = f"{lo} ~ {hi}" if lo and hi else "(空库,没有 vision 完成的照片)"
     except Exception:
         time_range = "(查询失败)"
-    return ROUND1_SYSTEM_TEMPLATE.format(today=today, photo_time_range=time_range)
+    return ROUND1_SYSTEM_TEMPLATE.format(
+        today=today, photo_time_range=time_range,
+        user_notes_section=_round1_notes_section(),
+    )
 
 ROUND2_SYSTEM = """你是用户的相册助手。系统已经根据用户的问题查到了一批照片(或聚合结果)。
 请用简洁中文回答用户的问题,引用具体照片时**用 `[photo:photo_id]` 标记**(系统会渲染成缩略图)。
@@ -231,6 +255,30 @@ ROUND2_SYSTEM = """你是用户的相册助手。系统已经根据用户的问�
 - 错误:"张三去了上院(7 张)、景观泳池(1 张)、音乐厅(2 张)..." — 太碎,没传达"目的地"这个核心
 - 引用照片时,每个聚合后的目的地引用 1-3 张代表 [photo:xxx]
 """
+
+
+def _build_round2_system() -> str:
+    """Round 2 prompt = 固定 ROUND2_SYSTEM + 用户背景知识(空时原样)。
+
+    Round 2 也注入:回答措辞要能理解称谓("豆豆昨天去哪了"的回答用"豆豆"称呼,
+    虽然查询时已换成真名),以及"家/老家"这类地点归属判断。
+    """
+    from ..store import config as cfg_store
+    notes = cfg_store.chat_user_notes()
+    if not notes:
+        return ROUND2_SYSTEM
+    return (
+        ROUND2_SYSTEM
+        + "\n**用户提供的背景知识**(仅供你理解称谓/人物关系/地点归属,可信度最高):\n"
+        + notes + "\n"
+        "- 背景知识是**理解材料,不是回答内容** — 不要在回答里复述人物关系或别名映射\n"
+        "- **称呼一个人只用一个词**,用户问题里用了哪个就全程只用哪个;问题里没提到的人,"
+        "用背景知识里的小名/称谓(没有才用真名)\n"
+        "- 禁止以下所有形式(这是用户明确反馈过的痛点):\n"
+        '  - 括号注真名:"豆豆(张三)" → 只写"豆豆"\n'
+        '  - 关系+姓名叠加:"他的爸爸张三""妈妈李丽" → 只写"爸爸""妈妈"或只写名字\n'
+        '  - 别名真名混用:前文"豆豆"后文"张三" → 全程统一\n'
+    )
 
 
 def _llm_run(system: str, user_text: str, stream: bool = False,
@@ -444,9 +492,11 @@ def chat(request: Request, body: dict = Body(...)) -> StreamingResponse:
                 f"你调用了 {plan['action']}({json.dumps(plan.get('args') or {}, ensure_ascii=False)})\n\n"
                 f"查询结果:\n```json\n{json.dumps(slim_result, ensure_ascii=False, separators=(',', ':'))}\n```\n\n"
                 "请基于以上结果用中文回答用户。引用具体照片时插入 [photo:photo_id] 标记。"
+                "称呼人物:用户问题里用过的称呼就全程只用它,不要并列真名、不要括号注名、"
+                '不要"角色+姓名"叠加(查询结果里的 persons 是库内真名,仅用于核对,不必照搬进回答)。'
             )
             answer_buf = []
-            for chunk in _llm_run(ROUND2_SYSTEM, r2_prompt, stream=True, provider_id=provider_id):
+            for chunk in _llm_run(_build_round2_system(), r2_prompt, stream=True, provider_id=provider_id):
                 answer_buf.append(chunk)
                 yield _sse("chunk", chunk)
 

@@ -136,3 +136,26 @@ def test_setup_next_step_progression(client: TestClient, tmp_path):
         assert s["next_step"] == "scan", f"got {s}"
         assert s["is_first_run"] is False
     # 如果 Ollama 不通,next_step 仍是 'configure'(因为依赖未就绪)— 我们不强求 assert
+
+
+def test_config_chat_notes_roundtrip(client: TestClient):
+    """GET 默认空 → POST 写入 → GET 读回(strip 后)。"""
+    r = client.get("/api/config/chat-notes")
+    assert r.status_code == 200 and r.json()["notes"] == ""
+    r = client.post("/api/config/chat-notes", json={"notes": "  豆豆是张三的小名\n李丽是张三的妈妈  "})
+    assert r.status_code == 200
+    assert r.json()["notes"] == "豆豆是张三的小名\n李丽是张三的妈妈"
+    assert client.get("/api/config/chat-notes").json()["notes"] == "豆豆是张三的小名\n李丽是张三的妈妈"
+
+
+def test_config_chat_notes_clear(client: TestClient):
+    """POST 空串 = 清空(回到未填写状态)。"""
+    client.post("/api/config/chat-notes", json={"notes": "豆豆是张三的小名"})
+    r = client.post("/api/config/chat-notes", json={"notes": ""})
+    assert r.status_code == 200 and r.json()["notes"] == ""
+
+
+def test_config_chat_notes_too_long_rejected(client: TestClient):
+    """>4000 字拒绝(这段每次提问都进 prompt,防误贴长文)。"""
+    r = client.post("/api/config/chat-notes", json={"notes": "长" * 4001})
+    assert r.status_code == 400

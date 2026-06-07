@@ -104,3 +104,33 @@ def test_set_llm_default_unknown_raises(tmp_config):
     cfg.update_llm_provider("a", {"kind": "openai-compat", "model": "x"})
     with pytest.raises(ValueError):
         cfg.set_llm_default("nonexistent")
+
+
+def test_chat_user_notes_default_empty(tmp_config):
+    from life_lens.store import config as cfg
+    assert cfg.chat_user_notes() == ""
+
+
+def test_update_chat_user_notes_roundtrip_preserves_others(tmp_config):
+    """写背景知识只动 chat.user_notes,amap_key 等其他字段不丢。"""
+    from life_lens.store import config as cfg
+    cfg.update_amap_key("k1")
+    cfg.update_chat_user_notes("  豆豆是张三的小名  ")
+    assert cfg.chat_user_notes() == "豆豆是张三的小名"   # strip
+    d = cfg.load_config()
+    assert d["amap_key"] == "k1"
+
+
+def test_chat_prompts_inject_notes(tmp_config):
+    """背景知识注入 Round 1/2 prompt;空时两边都不出现"背景知识"段。"""
+    import sqlite3
+    from life_lens.store import config as cfg
+    from life_lens.web import chat as chat_mod
+
+    assert chat_mod._round1_notes_section() == ""
+    assert "背景知识" not in chat_mod._build_round2_system()
+
+    cfg.update_chat_user_notes("豆豆是张三的小名")
+    r1 = chat_mod._build_round1_system(sqlite3.connect(":memory:"))  # 空 conn 走"查询失败"分支,验 format 占位符
+    assert "豆豆是张三的小名" in r1
+    assert "豆豆是张三的小名" in chat_mod._build_round2_system()

@@ -65,11 +65,31 @@ def _quote_fts(q: str) -> str:
     return ' '.join(''.join(safe).split())
 
 
+def _fuzzy_name_cids(name_to_cids: dict[str, list[str]], p: str) -> list[str]:
+    """精确人名没中时的模糊兜底:p 与库内 name 互为子串即命中。
+
+    解决"3 字人名只搜后 2 个字搜不到"(库里"王小明",用户问"小明")。
+    - 双向子串:`p in nm`(简称查全名)或 `nm in p`(用户带姓+后缀,如"王小明小朋友")
+    - 限 len(p) >= 2:单字太泛("明"会命中一串不相干的人)
+    - 命中多个 name 时全部返回 — persons 过滤本就是同名多 cluster OR 语义,
+      上层 grouped(AND)路径里这些 cid 折叠成一组,语义同样正确
+    """
+    if len(p) < 2:
+        return []
+    out: list[str] = []
+    for nm, cids in name_to_cids.items():
+        if p in nm or nm in p:
+            out.extend(cids)
+    return out
+
+
 def _resolve_person_filter(conn: sqlite3.Connection, persons: list[str]) -> list[str]:
     """把用户传的 persons(可能是人名 or cluster_id)解析成 cluster_id 列表。
 
     **重要**:同一个 name 可能对应多个 cluster_id(InsightFace `c_xxx` + 种子 `seed_xxx` +
     Apple `apple:<name>` 同名多条),全部要返回。OR 语义查询里 SQL 用 IN(...) 任一命中。
+    匹配顺序:精确 name → cluster_id 直传 → 子串模糊(顺序很重要:cluster_id 形如
+    `apple:张三` 含人名子串,模糊放最后才不会把"指定具体 cluster"扩成"同名全部")。
     """
     if not persons:
         return []
@@ -83,7 +103,8 @@ def _resolve_person_filter(conn: sqlite3.Connection, persons: list[str]) -> list
             out.extend(name_to_cids[p])
         elif p.startswith("seed_") or p.startswith("c_") or p.startswith("apple"):
             out.append(p)
-        # 既不是已知 name 也不是 cluster_id 格式 — 跳过(返回空匹配)
+        else:
+            out.extend(_fuzzy_name_cids(name_to_cids, p))
     return out
 
 
@@ -143,7 +164,11 @@ def _resolve_persons_grouped(
         elif p.startswith("seed_") or p.startswith("c_") or p.startswith("apple"):
             groups.append([p])
         else:
-            unrecognized.append(p)
+            fuzzy = _fuzzy_name_cids(name_to_cids, p)
+            if fuzzy:
+                groups.append(fuzzy)   # 模糊命中的多个人折叠成一组 OR(AND 语义下不漏)
+            else:
+                unrecognized.append(p)
     return groups, unrecognized
 
 

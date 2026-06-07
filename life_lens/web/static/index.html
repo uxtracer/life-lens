@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>life_lens</title>
+    <title>Life Lens 人生透镜</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -75,9 +77,24 @@
         </div>
 
         <!-- Card 4: 数据源 -->
-        <div class="config-card" data-card="sources">
+        <!-- Card 4: 问相册背景知识 -->
+        <div class="config-card" data-card="chatnotes">
             <div class="config-card-head">
                 <span class="config-card-step">4</span>
+                <div class="config-card-title">
+                    <h3>💬 问相册背景知识</h3>
+                    <p class="config-card-subtitle">告诉对话模型一些它查不到的事 — 小名/别名、人物关系、"家"在哪等,问相册时自动带上</p>
+                </div>
+                <span class="config-card-status" id="card-chatnotes-status">⏳</span>
+            </div>
+            <div class="config-card-body" id="card-chatnotes-body">
+                加载中……
+            </div>
+        </div>
+
+        <div class="config-card" data-card="sources">
+            <div class="config-card-head">
+                <span class="config-card-step">5</span>
                 <div class="config-card-title">
                     <h3>📁 数据源</h3>
                 </div>
@@ -97,10 +114,10 @@
             </div>
         </div>
 
-        <!-- Card 5: 内网访问(问相册)-->
+        <!-- Card 6: 内网访问(问相册)-->
         <div class="config-card" data-card="lan">
             <div class="config-card-head">
-                <span class="config-card-step">5</span>
+                <span class="config-card-step">6</span>
                 <div class="config-card-title">
                     <h3>📱 内网访问</h3>
                     <p class="config-card-subtitle">让手机/iPad 在同一 Wi-Fi 下用「问相册」— 只开放问相册页,配置/扫描/浏览仍仅本机</p>
@@ -112,10 +129,10 @@
             </div>
         </div>
 
-        <!-- Card 6: 存储 -->
+        <!-- Card 7: 存储 -->
         <div class="config-card" data-card="storage">
             <div class="config-card-head">
-                <span class="config-card-step">6</span>
+                <span class="config-card-step">7</span>
                 <div class="config-card-title">
                     <h3>💾 存储</h3>
                 </div>

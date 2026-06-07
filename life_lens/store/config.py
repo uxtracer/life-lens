@@ -127,6 +127,23 @@ def update_lan_chat(enabled: bool) -> None:
     save_config(d)
 
 
+def chat_user_notes() -> str:
+    """「问相册」用户背景知识(chat.user_notes,默认空)。
+
+    用户在配置页写的自由文本:小名/别名 ↔ 真名、人物关系、"家"在哪等。
+    web/chat.py 每次提问热读,注入 Round 1/2 prompt — 改完即时生效不用重启。
+    注意:这段文字会随提问发给所选 LLM(和用户问题同级的可外发文本)。
+    """
+    return str((load_config().get("chat") or {}).get("user_notes") or "").strip()
+
+
+def update_chat_user_notes(text: str) -> None:
+    """写「问相册」背景知识,保留 chat 下其他字段。"""
+    d = load_config()
+    d.setdefault("chat", {})["user_notes"] = (text or "").strip()
+    save_config(d)
+
+
 def update_vision_config(endpoint: str, model: str) -> None:
     """更新本地视觉模型配置(Ollama endpoint + 模型名)。
 

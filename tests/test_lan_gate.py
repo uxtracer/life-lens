@@ -98,6 +98,8 @@ def test_remote_cannot_toggle_itself(remote: TestClient, lan_on):
     ("GET", "/api/face/abc/crop"),
     ("GET", "/api/photo/abc/faces"),            # /api/photo 只放行单段路径
     ("GET", "/api/config/lan-chat"),
+    ("GET", "/api/config/chat-notes"),
+    ("POST", "/api/config/chat-notes"),
     ("POST", "/api/scan"),
     ("POST", "/api/scan/stop"),
     ("POST", "/api/reprocess"),

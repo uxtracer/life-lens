@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from life_lens.query.search import search_photos, _apply_favorite_boost
+from life_lens.query.search import search_photos, _apply_favorite_boost, _fuzzy_name_cids
 from life_lens.query.aggregate import places_visited, counts_by_year
 
 
@@ -67,6 +67,44 @@ def test_search_photos_persons_and_unrecognized(populated_db):
     """AND 模式遇未识别人名严格返 0(不退化成 OR)。"""
     r = search_photos(populated_db, persons=["张三", "完全不存在的人"], persons_mode="AND")
     assert len(r["items"]) == 0
+
+
+# ---------- 人名模糊匹配(精确没中时 ≥2 字互为子串兜底) ----------
+
+def test_fuzzy_name_cids_partial_name():
+    """库里 3 字全名,用户只说后 2 字 → 命中(主场景)。"""
+    m = {"王小明": ["seed_a", "c_1"], "李丽": ["seed_b"]}
+    assert _fuzzy_name_cids(m, "小明") == ["seed_a", "c_1"]
+
+
+def test_fuzzy_name_cids_reverse_containment():
+    """用户带姓+后缀("王小明小朋友"),库内名是其子串 → 也命中。"""
+    m = {"王小明": ["seed_a"]}
+    assert _fuzzy_name_cids(m, "王小明小朋友") == ["seed_a"]
+
+
+def test_fuzzy_name_cids_single_char_blocked():
+    """单字太泛,不模糊(空列表)。"""
+    m = {"王小明": ["seed_a"], "李明": ["seed_b"]}
+    assert _fuzzy_name_cids(m, "明") == []
+
+
+def test_fuzzy_name_cids_multi_hit_returns_all():
+    """模糊命中多个 name 时全部返回(OR 语义)。"""
+    m = {"王小明": ["seed_a"], "张小明": ["seed_c"]}
+    assert set(_fuzzy_name_cids(m, "小明")) == {"seed_a", "seed_c"}
+
+
+def test_search_photos_persons_fuzzy_or(populated_db):
+    """集成:persons=['张三丰'] 精确没中 → 模糊兜底命中'张三'(nm in p 方向)。"""
+    r = search_photos(populated_db, persons=["张三丰"])
+    assert {it["photo_id"] for it in r["items"]} == {"p_001", "p_002", "p_003"}
+
+
+def test_search_photos_persons_fuzzy_and(populated_db):
+    """集成:AND 模式下模糊人名也参与分组,不再被当 unrecognized 清零。"""
+    r = search_photos(populated_db, persons=["张三丰", "李丽"], persons_mode="AND")
+    assert {it["photo_id"] for it in r["items"]} == {"p_003"}
 
 
 def test_search_photos_time_window(populated_db):

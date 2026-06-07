@@ -19,7 +19,7 @@
 - **Phase 3** ✅:Apple Photos source + iCloud 备份脚本 + cities 地图;**未做**:sidecar JSON 导出、MCP server(Py ≥ 3.10)、视频
 - **Phase 4** ✅:语义向量(bge-small-zh + fastembed) + hybrid + RRF + LLM query expansion + chat jsonl 日志
 - **Phase 5** ✅:开源发布(脱敏 + db schema_version 自动备份 + A 层 pytest + publish.sh + 5-tab UI + RESTful 统一砍 claude-p + install.sh 一行 + config 跟 `--root`)
-- **Phase 6** 🟢:语义索引 inline 化 + Web 端补建/全量重建兜底 + `lens update` 子命令 + install.sh 端口占用先 kill 再启 + **album 信号**(本地 LLM 解析相册名 → 无 GPS 老照片补城市 + 事件关键词进 vision.tags)+ **LAN 分权**(配置页开关控制内网「问相册」移动页,热生效,见「隐私边界」)
+- **Phase 6** 🟢:语义索引 inline 化 + Web 端补建/全量重建兜底 + `lens update` 子命令 + install.sh 端口占用先 kill 再启 + **album 信号**(本地 LLM 解析相册名 → 无 GPS 老照片补城市 + 事件关键词进 vision.tags)+ **LAN 分权**(配置页开关控制内网「问相册」移动页,热生效,见「隐私边界」)+ **问相册背景知识**(config `chat.user_notes` 注入两轮 prompt,别名→真名)+ **persons 模糊匹配**(≥2 字子串兜底)
 
 ## 推荐工作流(重要)
 
@@ -304,7 +304,9 @@ Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/sho
 
 热读取(每次调用读 JSON),改 config 不需要重启。旧 `kind="claude-p"` 启动时忽略 + WARN。Env `LIFE_LENS_LLM_PROVIDER/MODEL/API_KEY/BASE_URL` 可临时覆盖。
 
-**query/ 共享层**(三轨共用):`search.search_photos(query, time_from, time_to, persons[], persons_mode, location, query_expansions, favorite_only, limit)` hybrid FTS5+sem RRF / `aggregate.places_visited(year?)` / `aggregate.counts_by_year()`。带 query 时每条 item 标 `match: literal|semantic`(literal=任一 FTS/LIKE 路径字面命中,semantic=仅向量相近的弱候选)— Round 2 prompt 据此分层校验。语义路径有余弦下限 `SEMANTIC_MIN_SCORE=0.42`(bge-small-zh 实测标定,见踩过的坑;换 embedding 模型要重标)。`favorite_only=True` 走 `photos.favorite` 生成列(源自 `derived.favorite` ← Apple 收藏);收藏在结果里**轻加权**(`_apply_favorite_boost` 上浮 ~3 位,不置顶)。browse `/api/photos?favorite_only=true` + ⭐ 角标 + "只看收藏" 开关同源。
+**query/ 共享层**(三轨共用):`search.search_photos(query, time_from, time_to, persons[], persons_mode, location, query_expansions, favorite_only, limit)` hybrid FTS5+sem RRF / `aggregate.places_visited(year?)` / `aggregate.counts_by_year()`。带 query 时每条 item 标 `match: literal|semantic`(literal=任一 FTS/LIKE 路径字面命中,semantic=仅向量相近的弱候选)— Round 2 prompt 据此分层校验。语义路径有余弦下限 `SEMANTIC_MIN_SCORE=0.42`(bge-small-zh 实测标定,见踩过的坑;换 embedding 模型要重标)。`favorite_only=True` 走 `photos.favorite` 生成列(源自 `derived.favorite` ← Apple 收藏);收藏在结果里**轻加权**(`_apply_favorite_boost` 上浮 ~3 位,不置顶)。browse `/api/photos?favorite_only=true` + ⭐ 角标 + "只看收藏" 开关同源。**persons 人名模糊兜底**:精确 name 没中时 ≥2 字互为子串匹配(`_fuzzy_name_cids`,解决"3 字人名只说后 2 字搜不到";单字太泛不模糊;命中多人全返 OR 语义,AND 路径折叠成组)— 匹配顺序 精确 → cluster_id 直传 → 模糊,顺序不能换(`apple:张三` 含人名子串,模糊放前面会把"指定具体 cluster"扩成"同名全部")。
+
+**问相册背景知识**(config `chat.user_notes`,配置页 Card 4):用户写小名/别名↔真名、人物关系、"家"在哪等自由文本,`chat.py` 每次提问热读注入 Round 1(指示把别名换真名再填 persons)+ Round 2(回答沿用用户称呼)。别名→真名只能靠它(模糊匹配解决不了无字面重叠的别名)。API `GET/POST /api/config/chat-notes`(4000 字上限;不在 LAN 白名单,内网设备不可改)。注意:这段文字随每次提问外发给 LLM(和用户问题同级,UI 已提示)。
 
 **MCP server**:推迟(Py ≥ 3.10)。
 

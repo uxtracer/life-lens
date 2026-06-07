@@ -82,6 +82,55 @@ async function refreshSettings() {
 
     // 4. 内网访问开关卡(独立 fetch,不依赖 setup/status)
     renderLanCard();
+
+    // 5. 问相册背景知识卡(独立 fetch)
+    renderChatNotesCard();
+}
+
+// 问相册背景知识 — 自由文本,chat.py 每次提问热读注入 prompt,保存即生效
+async function renderChatNotesCard() {
+    const body = document.getElementById('card-chatnotes-body');
+    if (!body) return;
+    let d;
+    try {
+        d = await api('/config/chat-notes');
+    } catch (e) {
+        _setCardChrome('chatnotes', '', '⚠');
+        body.innerHTML = `<p class="hint" style="color:#b91c1c">加载失败:${escapeHtml(e.message || e)}</p>`;
+        return;
+    }
+    const has = !!(d.notes && d.notes.trim());
+    // 空着是正常状态(可选项),不给 attention;填了给 ready
+    _setCardChrome('chatnotes', has ? 'ready' : '', has ? '✅ 已填写' : '⚪ 未填写');
+    body.innerHTML = `
+        <div class="config-empty-guide">
+            写一些照片里查不到、但回答问题需要知道的事,问相册时会自动告诉对话模型。
+            比如:<b>小名/别名</b>(「豆豆是张三的小名」)、<b>人物关系</b>(「李丽是张三的妈妈」)、
+            <b>常用地点</b>(「家在某小区一带」「公司在某园区」)。
+            <br>提示:这段内容会随每次提问一起发给所选对话模型(和你输入的问题一样),照片本身仍然完全本地。
+        </div>
+        <div class="config-form-row">
+            <textarea id="chatnotes-text" rows="5" maxlength="4000"
+                style="width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.6;padding:7px 10px;border:1px solid #d1d5db;border-radius:4px;box-sizing:border-box"
+                placeholder="一行写一条,例如:&#10;豆豆是张三的小名&#10;李丽是张三的妈妈&#10;家在某小区一带">${escapeHtml(d.notes || '')}</textarea>
+        </div>
+        <div class="config-form-row">
+            <button id="chatnotes-save-btn">保存</button>
+            <span class="hint" id="chatnotes-hint" style="margin:0">保存后立即生效,无需重启</span>
+        </div>
+    `;
+    document.getElementById('chatnotes-save-btn').onclick = async () => {
+        const text = document.getElementById('chatnotes-text').value;
+        try {
+            await api('/config/chat-notes', { method: 'POST', body: JSON.stringify({ notes: text }) });
+        } catch (err) {
+            alert('保存失败:' + (err.message || err));
+            return;
+        }
+        document.getElementById('chatnotes-hint').textContent = '✅ 已保存,下次提问生效';
+        const has2 = !!text.trim();
+        _setCardChrome('chatnotes', has2 ? 'ready' : '', has2 ? '✅ 已填写' : '⚪ 未填写');
+    };
 }
 
 // 内网「问相册」开关 — POST 后 gate 热读 config,即时生效不用重启
