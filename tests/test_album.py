@@ -218,4 +218,6 @@ def test_album_country_only_fills_country_not_city(tmp_path: Path):
     lb = derive_mod.compute(rec, conn=conn)["location_bucket"]
     assert lb["country"] == "日本"
     assert lb["city"] is None and lb["place_name"] is None
+    # 只到国家也要生成 formatted_address(国外 country 打头)
+    assert lb["formatted_address"] == "日本"
     conn.close()

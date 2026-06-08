@@ -134,6 +134,17 @@ iPhone(尤其早期 iOS)经常没 OffsetTimeOriginal,`exif/extract.py` 没 Offse
 - **直辖市坑**:北京/上海/天津/重庆的 `addressComponent.city` 是空数组,fallback 到 province
 - **配额管理**:`amap_quota` 表按 Asia/Shanghai 日期记 count,免费 5000/天上限设 4800(buffer 200)。耗尽时 `is_quota_exhausted` 阻止 HTTP,runner 自动暂停 run
 
+### 国外 GPS:高德只覆盖中国 → 靠 Apple `place_apple` 兜底 ⚠️⚠️
+
+高德 reverse 只有中国境内数据,境外坐标返回 HTTP200/status=1 但 `addressComponent` 全空。老代码 `_extract` 写 `country = ac.get("country") or "中国"`,把**所有国外照片硬标成"中国"且 formatted_address=null**(实测东京/巴黎/洛杉矶共 ~1.2 万张中招)。**国外地点根本不该问高德** —— 数据源是 Apple Photos 透传的 `place_apple`(osxphotos `p.place.name`,Apple 全球地图早就反查好,如 `环球影城, Universal City, 加利福尼亚, 美国`)。
+
+**三处修复(2026-06,均在 `geocode/amap.py` + `scanner/derived.py`)**:
+1. `reverse_geocode` 顶部 `_out_of_china` 短路 return None(cache 之前)→ 国外不调高德、不耗配额、自动绕过历史污染缓存;`_extract` 的 `or "中国"` 去掉。
+2. 新 `parse_place_apple(s)`:Apple 串**细→粗、末段恒国家**,按位置映射 country=末段/province=倒二/city=倒三/poi=首段(仅 ≥4 段),产出与高德**同构**的 bucket。derived `_location_bucket` 的 `if parsed: ... elif place_apple:` —— **安全不变量:国内 reverse 成功必走 `if parsed`,apple 永不覆盖高德中国结果**。
+3. `_build_formatted_address` 按 country 分支:国外(country!="中国")country 打头、各级 ` · ` 连接(`美国 · 加利福尼亚 · 环球影城`);中国行**字节不变**(admin 拼接)。
+
+**`_out_of_china` 的 bbox 很粗**(lng 73–135/lat 3.86–53.55)**会把泰国/越南/印度等圈进"境内"** → 不短路、高德对这些境外点只回 country。对策:`reverse_geocode` 出口 `_has_location()`(province/city/aoi/poi 任一非空才算查到),**只有 country 的空壳当 miss 返 None** → 走 apple 兜底;真有 POI 的中国边境点(德天瀑布:有 poi 无 province)仍保留。**改了 GPS/地点逻辑后跑 `reprocess_derived` 回填**(全库 11 万张 ~1min,国内走缓存、国外短路,不耗配额)。已知小瑕疵:单段 apple 是水域/地标名(北太平洋/塞纳河)会落进 country 字段,无 gazetteer 难判,接受。
+
 ### FTS5 `unicode61` 不索引中文 ⚠️
 
 SQLite FTS5 默认 `unicode61 remove_diacritics 2` **完全不索引中文**(`MATCH '观光车'` 返 0 张)。改 `tokenize='trigram'`(SQLite 3.34+ 内置),db.py 检测旧 schema 自动 DROP + CREATE + 回填。**限制:搜索词 ≥ 3 字符**(2 字"长城"匹配不到 trigram),`search.py` query 短词 fallback LIKE。
@@ -263,7 +274,7 @@ Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/sho
 - `vision.*` 是 LLM 死字符串,改名后**残留旧名,接受**
 - `people.persons[].cluster_id` 是锚,name 查询时 join `persons` 表实时 resolve
 - `people.names[]` 是派生去重列表,SQL 查询方便
-- `derived.location_bucket` 优先 amap reverse(GPS),失败 graceful 全 null;无 GPS 时 album 名解析兜底(填 country/city/poi_name,跟 GPS 同 `_build_formatted_address` 格式;无来源标记字段)
+- `derived.location_bucket` 优先级:**国内 GPS → 高德 reverse**;**国外 GPS → Apple `place_apple` 解析**(`parse_place_apple`,高德对境外短路返 None 时);**无 GPS → album 名兜底**。三路都填同构字段(country/province/city/poi_name/place_name/formatted_address),跟 GPS 同 `_build_formatted_address` 格式;全失败 graceful 全 null。见「踩过的坑 / 国外 GPS」
 - `meta.errors[]` 装 self-check / vision_role_mismatch,带 `acknowledged` 字段
 
 ## Vision Prompt v9.2 要点
@@ -411,7 +422,7 @@ life_lens/scanner/runner.py    Phase A/B + graceful stop + 拍照时间正序 + 
 life_lens/scanner/reprocess.py rematch/reprocess_faces + reprocess_vision_for + reprocess_albums(run 范围+dry_run)+ select_photos
 life_lens/vision/prompts.py    v9.2 + _bbox_position(9 宫格)+ _desc/_struct_set_of_mark
 life_lens/vision/role_check.py description ↔ persons.actions 自检
-life_lens/geocode/amap.py      WGS-84→GCJ-02 + 50m 网格 + 配额 + POI 距离最近
+life_lens/geocode/amap.py      WGS-84→GCJ-02 + 50m 网格 + 配额 + POI 距离最近 + 国外短路(_out_of_china/_has_location)+ parse_place_apple(国外靠 Apple 透传)
 life_lens/embed/               source_text 拼接(含 objects) + Embedder singleton
 life_lens/query/search.py      hybrid FTS+sem RRF + persons_mode + query_expansions
 life_lens/query/semantic.py    内存 brute-force 索引 + rrf_merge_multi

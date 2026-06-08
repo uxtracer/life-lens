@@ -119,6 +119,16 @@ def _location_bucket(exif: dict, meta: dict, conn: Optional[sqlite3.Connection] 
                 bucket[k] = parsed.get(k)
             # place_name 首选 AOI > POI > Apple 透传
             bucket["place_name"] = parsed.get("place_name") or place_apple
+        elif place_apple:
+            # 国外:高德短路返 None,改用 Apple 透传串解析出与国内同构的字段
+            # (绝不会覆盖国内高德结果 —— 国内 reverse 成功必走上面 if parsed 分支)
+            from ..geocode.amap import parse_place_apple, _build_formatted_address
+            ap = parse_place_apple(place_apple)
+            if ap:
+                for k in ("country", "province", "city", "district", "township",
+                          "aoi_name", "poi_name", "place_name"):
+                    bucket[k] = ap[k]
+                bucket["formatted_address"] = _build_formatted_address(bucket)
 
     # album 兜底:GPS reverse 没拿到地点时,用相册名推断的国家/城市/景点填。
     if not bucket["country"] and album_country:
@@ -131,6 +141,12 @@ def _location_bucket(exif: dict, meta: dict, conn: Optional[sqlite3.Connection] 
             bucket["poi_name"] = album_place
         # place_name 只放真 POI/AOI(跟 GPS 路径一致),只有城市时留空,不拿城市名顶替
         bucket["place_name"] = bucket["poi_name"] or bucket["aoi_name"]
+        from ..geocode.amap import _build_formatted_address
+        bucket["formatted_address"] = _build_formatted_address(bucket)
+
+    # 国外 album 只到国家(无 city)时上面 city 分支不触发,formatted 仍空 → 补建一次
+    # (如 country='日本' → '日本')。仅在尚无 formatted 且有 country 时,不覆盖已有结果。
+    if bucket["formatted_address"] is None and bucket["country"]:
         from ..geocode.amap import _build_formatted_address
         bucket["formatted_address"] = _build_formatted_address(bucket)
 
