@@ -77,6 +77,12 @@ Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`
 
 判断标准:**外发数据能否让接收方还原"这是哪张照片"**?GPS 单独发不行,但 GPS + 时间 + 缩略图组合就行 → 所以缩略图字节不能外发。
 
+### Apple Photos「隐藏」相册照片:入口完全排除 ⚠️
+
+用户在 Photos 里隐藏 = 明确不想被看到(常是敏感内容)。**`sources/photos_library.py::iter_photos` 在最顶端 `if p.hidden: continue`**,隐藏照片连 Phase A 队列条目 / preprocess / vision / 入库都不产生 —— 不是"扫了再藏",是**根本不扫**。取消隐藏后需重新扫描才纳入。
+
+**历史教训(2026-06)**:老代码读了 `p.hidden` 存进 `source_signals.hidden` 却**从没用它过滤任何东西** —— 隐藏照片照样跑 vision、照样在浏览/问相册里显示、搜得到(实测 290 张被扫、242 张已生成 AI 描述)。已批量清除(photos/jobs/faces/embeddings/fts 五表 + 预处理缓存 jpg 全删)。**`source_signals.hidden` 字段保留但现在恒为 false**(入口已排除),别再以为它在做事;derived **只镜像 `favorite`,不镜像 `hidden`**。回归测试 `tests/test_photos_source_hidden.py`。
+
 ### LAN 分权(局域网 ≠ 外发,但也不是本机)
 
 监听**始终 0.0.0.0**,按**来源 IP 分权**(`web/server.py` 的 `lan_gate` 中间件),两层控制:
@@ -123,6 +129,14 @@ Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`
 ### iPhone EXIF 没 OffsetTime → captured_at_utc 是空字符串 ⚠️
 
 iPhone(尤其早期 iOS)经常没 OffsetTimeOriginal,`exif/extract.py` 没 OffsetTime 时 `captured_at_utc` 留空。**症状**:`WHERE captured_at_utc >= ?` 把所有照片筛掉。**当前修复**:`COALESCE(NULLIF(captured_at_utc,''), captured_at_local)`。**根治 TODO**:有 GPS 时按经度估时区。
+
+### 文件常没 EXIF 拍摄日期 → Apple `p.date` 兜底 ⚠️⚠️
+
+`exif/extract.py` 只从**文件 EXIF** 读 DateTimeOriginal。但 **PNG / 截图 / 老照片 / iCloud 合并导入的图,文件里根本没这个字段** —— 实测一个库 **21,332 张(~19%)`captured_at_local` 为空**。空日期照片在浏览/Photos 里按"添加日期"显示,全挤在导入那几天,看着像"某天突然几万张"。**Apple 自己有权威日期**(`osxphotos p.date`,带时区,Photos 列表就靠它排序),我们以前没读。**修复(2026-06)**:`SourceMetadata` 加 `apple_captured_local/utc/tz_offset_minutes`(`photos_library.get_metadata` 从 `p.date`/`p.tzoffset` 算);`pipeline.process_one` 在文件 EXIF 没日期时用它兜底;Phase A 入队排序同样兜底(`runner.py`,否则空日期全排队首 + 时间维度失真)。**只在文件 EXIF 缺时兜底,不动已有正确日期的照片**。存量用脚本读 `p.date` 回填(改 exif + jobs.captured_at_local + derived.time_bucket,不重跑 vision)。
+
+### Apple 源会把视频也吞进来 ⚠️
+
+`db.photos()` 同时返回照片**和视频**,`iter_photos` 以前没过滤 → 实测 3,966 个 MOV/MP4 进了库(vision 解不了 MOV,纯失败/噪音 + 全是空日期)。filesystem 源靠扩展名白名单挡视频,Apple 源没扩展名概念,**必须 `if p.ismovie: continue`**(和 hidden 同处)。已批量清除存量。
 
 ### 高德 reverse geocoding 设计要点
 
@@ -416,7 +430,7 @@ sqlite3 ~/.life_lens/lens.db "SELECT photo_id, json_extract(exif, '$.captured_at
 life_lens/sources/             数据源 adapter(filesystem / photos_library)
 life_lens/preprocess/cache.py  缓存键 = photo_id;改了所有缓存失效
 life_lens/exif/extract.py      只 4 个字段,EXIF 别加机型/参数
-life_lens/scanner/derived.py   派生规则,改了 reprocess --group derived(location_bucket album 国家/城市/景点兜底 + favorite/hidden 镜像 source_signals)
+life_lens/scanner/derived.py   派生规则,改了 reprocess --group derived(location_bucket album 国家/城市/景点兜底 + favorite 镜像 source_signals;hidden 不镜像 —— 隐藏照片在 source 入口已排除,见隐私边界)
 life_lens/scanner/album.py     相册名→国家/城市/景点+事件关键词(本地 Ollama 解析 + album_parse_cache 去重缓存)
 life_lens/scanner/runner.py    Phase A/B + graceful stop + 拍照时间正序 + amap quota 监控
 life_lens/scanner/reprocess.py rematch/reprocess_faces + reprocess_vision_for + reprocess_albums(run 范围+dry_run)+ select_photos

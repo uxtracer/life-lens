@@ -26,6 +26,11 @@ class SourceMetadata:
     apple_favorite: bool = False
     apple_hidden: bool = False
     apple_place: Optional[str] = None
+    # Apple 自己的拍摄时间(osxphotos p.date,权威、带时区)。文件 EXIF 常缺 DateTimeOriginal
+    # (PNG/截图/老照片/iCloud 合并导入),此时用它兜底。格式与 exif/extract.py 一致。
+    apple_captured_local: Optional[str] = None        # 'YYYY-MM-DDTHH:MM:SS'(本地,无 tz)
+    apple_captured_utc: Optional[str] = None          # 'YYYY-MM-DDTHH:MM:SSZ'
+    apple_tz_offset_minutes: Optional[int] = None
 
 
 @dataclass(frozen=True)

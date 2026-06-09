@@ -73,6 +73,14 @@ def process_one(
             "hidden":     md.apple_hidden,
             "place_apple": md.apple_place,
         }
+        # 拍摄时间兜底:文件常缺 EXIF DateTimeOriginal(PNG/截图/老照片/iCloud 合并导入),
+        # 用 Apple 权威 p.date 填(filesystem 源这几个字段为 None,不触发)。见 base.py。
+        ex = rec.get("exif") or {}
+        if not ex.get("captured_at_local") and md.apple_captured_local:
+            ex["captured_at_local"] = md.apple_captured_local
+            ex["captured_at_utc"]   = md.apple_captured_utc
+            ex["tz_offset_minutes"] = md.apple_tz_offset_minutes
+            rec["exif"] = ex
     except Exception as e:
         record_error(rec, "source_metadata", str(e))
 

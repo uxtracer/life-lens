@@ -75,6 +75,15 @@ class ApplePhotosSource(PhotoSource):
     def iter_photos(self) -> Iterator[PhotoRef]:
         db = self._ensure_db()
         for p in db.photos():
+            if p.hidden:
+                continue   # 隐私:Apple Photos「隐藏」相册的照片完全不纳入 life_lens
+                           # —— 入口就跳过,连 job 条目 / preprocess / vision 都不产生。
+                           # 用户在 Photos 里隐藏 = 明确不想被看到,life_lens 必须尊重。
+                           # 取消隐藏后需重新扫描才会纳入(Phase A iter 不再跳过它)。
+            if p.ismovie:
+                continue   # 视频不纳入主流程(pillow_heif 不解 MOV,vision 也处理不了)。
+                           # Apple 源 db.photos() 同时返回照片和视频,这里按 ismovie 过滤。
+                           # filesystem 源是扩展名白名单挡的,Apple 源没扩展名概念故在此挡。
             if not p.path:
                 continue   # 云端未下载或文件已不在磁盘
             src = Path(p.path)
@@ -95,6 +104,18 @@ class ApplePhotosSource(PhotoSource):
         except KeyError:
             return SourceMetadata()
         persons = [n for n in (p.persons or []) if n and n != "_UNKNOWN_"]
+        # Apple 权威拍摄时间(p.date 带时区)。文件 EXIF 常缺,exif 阶段用这个兜底。
+        import datetime as _dt
+        loc = utc = None
+        tzmin = None
+        ad = p.date
+        if ad is not None:
+            loc = ad.replace(tzinfo=None).isoformat(timespec="seconds")
+            if ad.tzinfo is not None:
+                utc = ad.astimezone(_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            tzo = getattr(p, "tzoffset", None)
+            if tzo is not None:
+                tzmin = int(tzo) // 60
         return SourceMetadata(
             apple_uuid=p.uuid,
             apple_persons=persons,
@@ -103,6 +124,9 @@ class ApplePhotosSource(PhotoSource):
             apple_favorite=bool(p.favorite),
             apple_hidden=bool(p.hidden),
             apple_place=(p.place.name if p.place else None),
+            apple_captured_local=loc,
+            apple_captured_utc=utc,
+            apple_tz_offset_minutes=tzmin,
         )
 
     def iter_faces(

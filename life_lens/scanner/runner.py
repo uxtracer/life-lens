@@ -273,6 +273,13 @@ def _enqueue_phase(conn, source: PhotoSource, run_id: str, limit: Optional[int] 
         repo.ensure_photo_row(conn, identity_stub)
 
         captured = exif_extract.peek_captured_at(ref.original_path)
+        if not captured:
+            # 文件没 EXIF 拍摄时间 → 用 source 提供的权威日期(Apple p.date)兜底,
+            # 否则这批照片 captured_at_local 为空会全排到队首、且时间维度统计失真。
+            try:
+                captured = source.get_metadata(ref).apple_captured_local
+            except Exception:
+                captured = None
         repo.enqueue_job(conn, photo_id, run_id=run_id, captured_at_local=captured)
         new_count += 1
         if limit is not None and new_count >= limit:
