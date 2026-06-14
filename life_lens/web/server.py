@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import api, chat as chat_mod
+from . import api, chat as chat_mod, frame as frame_mod
 from ..store import db, repo
 
 log = logging.getLogger(__name__)
@@ -49,6 +49,16 @@ _LAN_ALLOW = [
     ("GET", re.compile(r"^/api/llm-info$")),
 ]
 
+# 智能相框(ESP32 等)白名单 — 独立开关 frame.lan_enabled 控制,和「问相册」隔离。
+# 只放行读图 / 播放列表,不含任何配置 / 写操作 / 相框自身开关端点(相框不能给自己开门)。
+_LAN_FRAME_ALLOW = [
+    ("GET", re.compile(r"^/api/frame/next$")),
+    ("GET", re.compile(r"^/api/frame/photo/[^/]+$")),  # 单段路径(指定 id 取图)
+    ("GET", re.compile(r"^/api/frame/playlist$")),
+    ("GET", re.compile(r"^/api/frame/info$")),
+    ("GET", re.compile(r"^/health$")),
+]
+
 
 def _is_local_client(request: Request) -> bool:
     """是否本机请求。'testclient' 是 starlette TestClient 的默认 client host,
@@ -70,15 +80,22 @@ def create_app(root: Path) -> FastAPI:
     async def lan_gate(request: Request, call_next):
         if _is_local_client(request):
             return await call_next(request)
-        # 总开关热读(只对远程请求读,本机零开销;config 是小 json,代价可忽略)
+        # 远程请求:每个功能自带开关 + 白名单(热读,翻开关即时生效)。
+        # config 是小 json,只对远程请求读,本机零开销。
         from ..store import config as config_mod
+        method = "GET" if request.method == "HEAD" else request.method
+        path = request.url.path
+        # 1. 智能相框(独立开关,和问相册隔离)
+        if config_mod.frame_lan_enabled():
+            for m, pat in _LAN_FRAME_ALLOW:
+                if m == method and pat.match(path):
+                    return await call_next(request)
+        # 2. 问相册
         if not config_mod.lan_chat_enabled():
             return JSONResponse(
                 {"detail": "内网访问未开启(在本机配置页打开「内网访问」开关)"},
                 status_code=403,
             )
-        method = "GET" if request.method == "HEAD" else request.method
-        path = request.url.path
         for m, pat in _LAN_ALLOW:
             if m == method and pat.match(path):
                 return await call_next(request)
@@ -90,6 +107,7 @@ def create_app(root: Path) -> FastAPI:
     # API 路由
     app.include_router(api.router, prefix="/api")
     app.include_router(chat_mod.router, prefix="/api")
+    app.include_router(frame_mod.router, prefix="/api")
 
     # 静态前端
     static_dir = Path(__file__).parent / "static"

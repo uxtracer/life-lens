@@ -1323,6 +1323,69 @@ def config_set_lan_chat(body: dict = Body(...)):
     return {"ok": True, "enabled": enabled}
 
 
+@router.get("/config/frame")
+def config_get_frame(request: Request):
+    """智能相框接口状态:开关 + 默认主题 + 当前照片池大小 + 相框可用的访问 URL。
+
+    本端点**不在 LAN 白名单** — 相框设备拿不到/改不了配置(只能取图)。
+    """
+    from ..store import config as cfg_store
+    ip = _guess_lan_ip()
+    port = request.url.port or 7878
+    theme = cfg_store.frame_theme()
+    conn = _conn(request)
+    try:
+        # 复用相框侧的池解析(人名→人脸过滤 / 否则内容搜索),保证卡片显示和实际轮播一致
+        from .frame import _resolve_pool
+        ids, kind = _resolve_pool(conn, theme)
+        pool_size = len(ids)
+    finally:
+        conn.close()
+    base = f"http://{ip}:{port}" if ip else None
+    return {
+        "lan_enabled": cfg_store.frame_lan_enabled(),
+        "theme": theme,
+        "kind": kind,                       # favorites / person / theme
+        "using_favorites": kind == "favorites",
+        "pool_size": pool_size,
+        "lan_url": base,
+        "next_url": f"{base}/api/frame/next" if base else None,
+    }
+
+
+@router.post("/config/frame")
+def config_set_frame(request: Request, body: dict = Body(...)):
+    """写智能相框配置。两字段都可选,只改传了的那个(热生效不用重启):
+      - enabled (bool):内网相框接口总开关
+      - theme   (str) :默认主题(空 = 收藏照片)
+
+    主题改成非空时,自动后台用 LLM 构建一份审核过的播放列表(可关:auto_build=false)。
+    本端点不在 LAN 白名单 — 内网设备不能给自己开门或改主题。
+    """
+    from ..store import config as cfg_store
+    body = body or {}
+    if "enabled" in body:
+        cfg_store.update_frame_lan(bool(body.get("enabled")))
+    build_started = False
+    if "theme" in body:
+        theme = str(body.get("theme") or "")
+        if len(theme) > 200:
+            raise HTTPException(400, f"主题太长({len(theme)} 字 > 200 上限)")
+        old = cfg_store.frame_theme()
+        cfg_store.update_frame_theme(theme)
+        # 主题变了且非空 → 自动用 LLM 挑一份(除非显式 auto_build=false)
+        if theme.strip() and theme.strip() != old and body.get("auto_build", True):
+            from .frame import start_build
+            build_started = start_build(request.app.state.root, theme.strip(),
+                                        body.get("provider_id"))
+    return {
+        "ok": True,
+        "lan_enabled": cfg_store.frame_lan_enabled(),
+        "theme": cfg_store.frame_theme(),
+        "build_started": build_started,
+    }
+
+
 @router.get("/config/chat-notes")
 def config_get_chat_notes():
     """「问相册」背景知识(用户写给 LLM 的小名/人物关系/常用地点等)。"""

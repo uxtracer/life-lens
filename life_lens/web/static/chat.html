@@ -86,16 +86,18 @@
 <div id="photo-viewer" class="viewer hidden">
     <div class="viewer-backdrop"></div>
     <div class="viewer-content">
-        <img id="viewer-img" title="1024px 预览(非原图),下载原图请用下方按钮">
-        <div class="viewer-meta">
-            <div class="viewer-caption"></div>
-            <div class="viewer-desc"></div>
+        <div class="viewer-main">
+            <img id="viewer-img" title="1024px 预览(非原图),下载原图请用下方按钮">
+            <div class="viewer-meta">
+                <div class="viewer-caption"></div>
+                <div class="viewer-desc"></div>
+            </div>
+            <div class="viewer-actions">
+                <a id="viewer-download" download>下载原图</a>
+                <button id="viewer-close">关闭</button>
+            </div>
         </div>
-        <div class="viewer-actions">
-            <a id="viewer-download" download>下载原图</a>
-            <button id="viewer-detail">完整详情 →</button>
-            <button id="viewer-close">关闭</button>
-        </div>
+        <div class="viewer-detail"></div>
     </div>
 </div>
 

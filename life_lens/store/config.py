@@ -144,6 +144,38 @@ def update_chat_user_notes(text: str) -> None:
     save_config(d)
 
 
+def frame_lan_enabled() -> bool:
+    """智能相框内网接口开关(frame.lan_enabled,默认关)。
+
+    和 `serve.lan_chat` 平级、互不影响:web/server.py 的 lan_gate 每次远程
+    请求热读,翻开关即时生效不用重启。关闭时 /api/frame/* 对内网一律 403。
+    相框只吐降采样 JPEG(隐私级别 ≤ thumb),但单独开关让"开相框"与"开问相册"解耦。
+    """
+    return bool((load_config().get("frame") or {}).get("lan_enabled", False))
+
+
+def update_frame_lan(enabled: bool) -> None:
+    """写相框内网接口开关,保留 frame 下其他字段(如 theme)。"""
+    d = load_config()
+    d.setdefault("frame", {})["lan_enabled"] = bool(enabled)
+    save_config(d)
+
+
+def frame_theme() -> str:
+    """相框默认主题(frame.theme,默认空 = 用收藏照片)。
+
+    /api/frame/next 不带 ?theme= 时读它 — 用户在配置页改主题,相框固件不用重刷。
+    """
+    return str((load_config().get("frame") or {}).get("theme") or "").strip()
+
+
+def update_frame_theme(text: str) -> None:
+    """写相框默认主题,保留 frame 下其他字段(如 lan_enabled)。"""
+    d = load_config()
+    d.setdefault("frame", {})["theme"] = (text or "").strip()
+    save_config(d)
+
+
 def update_vision_config(endpoint: str, model: str) -> None:
     """更新本地视觉模型配置(Ollama endpoint + 模型名)。
 

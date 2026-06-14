@@ -85,6 +85,178 @@ async function refreshSettings() {
 
     // 5. 问相册背景知识卡(独立 fetch)
     renderChatNotesCard();
+
+    // 6. 智能相框开关卡(独立 fetch)
+    renderFrameCard();
+}
+
+// 智能相框开关 — 独立接口,和问相册隔离;POST 后 gate 热读 config,即时生效
+let _framePollTimer = null;
+
+async function renderFrameCard() {
+    const body = document.getElementById('card-frame-body');
+    if (!body) return;
+    if (_framePollTimer) { clearTimeout(_framePollTimer); _framePollTimer = null; }
+    let d, ps;
+    try {
+        [d, ps] = await Promise.all([api('/config/frame'), api('/frame/playlist/status')]);
+    } catch (e) {
+        _setCardChrome('frame', '', '⚠');
+        body.innerHTML = `<p class="hint" style="color:#b91c1c">加载失败:${escapeHtml(e.message || e)}</p>`;
+        return;
+    }
+    // 关闭是安全默认,不算"待配置"
+    _setCardChrome('frame', d.lan_enabled ? 'ready' : '', d.lan_enabled ? '✅ 已开启' : '⚪ 已关闭');
+
+    let poolDesc;
+    if (d.kind === 'person') {
+        poolDesc = `识别为<b>人物</b> · 轮播 <b>${escapeHtml(d.theme)}</b> 的照片(${d.pool_size} 张,按人脸)`;
+    } else if (d.kind === 'theme') {
+        poolDesc = `按<b>内容</b>搜索 <b>${escapeHtml(d.theme)}</b>(匹配 ${d.pool_size} 张)`;
+    } else {
+        poolDesc = `当前轮播 <b>收藏照片</b>(共 ${d.pool_size} 张)`;
+    }
+    const themeRow = `
+        <div class="config-form-row" style="align-items:center;gap:8px;flex-wrap:wrap">
+            <label style="font-size:13px">轮播主题</label>
+            <input id="frame-theme-input" type="text" maxlength="200"
+                placeholder="留空=收藏;填人名=出这个人;填场景如「海边」=内容搜索"
+                value="${escapeHtml(d.theme || '')}"
+                style="flex:1;min-width:160px;padding:6px 9px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;box-sizing:border-box">
+            <button id="frame-theme-save" class="secondary">保存主题</button>
+            <span class="hint" id="frame-theme-hint" style="margin:0">${poolDesc}</span>
+        </div>`;
+
+    // AI 审核播放列表区块(仅有主题时显示;收藏模式不需要 AI)
+    const aiSection = _renderFrameAiSection(d, ps);
+
+    if (d.lan_enabled) {
+        const url = d.next_url ? escapeHtml(d.next_url) : null;
+        body.innerHTML = `
+            <div class="config-card-ok-summary">
+                ✅ 相框接口已开启${url
+                    ? ` · 设备访问 <code>${url}?w=800&amp;h=480&amp;mode=cover</code>(把 w/h 换成你屏幕的分辨率)`
+                    : '(未探测到局域网 IP,检查 Wi-Fi 连接)'}
+            </div>
+            ${themeRow}
+            ${aiSection}
+            <div class="config-empty-guide" style="margin-top:8px">
+                设备每隔几秒 GET <code>/api/frame/next</code> 就能拿到下一张图(已按 <code>w/h</code> 缩放好的 JPEG)。
+                只读出图,配置/扫描/浏览仍仅限本机;关掉此开关后设备立即无法访问。
+            </div>
+            <div class="config-form-row">
+                <button id="frame-toggle-btn" class="secondary">关闭相框接口</button>
+            </div>
+        `;
+    } else {
+        body.innerHTML = `
+            <div class="config-empty-guide">
+                开启后,同一 Wi-Fi 下的智能相框/带屏设备可以 GET <code>/api/frame/next</code> 轮播照片
+                —— 只回缩放后的图,不发原图,和「问相册」是<b>两个独立开关</b>,互不影响。
+                <br>默认轮播收藏照片,也可指定主题;局域网设备<b>只能</b>取图,改不了任何配置。
+            </div>
+            ${themeRow}
+            ${aiSection}
+            <div class="config-form-row">
+                <button id="frame-toggle-btn">开启相框接口</button>
+            </div>
+        `;
+    }
+
+    document.getElementById('frame-toggle-btn').onclick = async () => {
+        const want = !d.lan_enabled;
+        const msg = want
+            ? '确定开启智能相框接口?\n\n同一局域网内的设备将能通过 /api/frame/* 轮播你的照片(收藏或指定主题),只读出图、不发原图。'
+            : '确定关闭相框接口?\n\n相框将立即无法取图(即时生效)。';
+        if (!confirm(msg)) return;
+        try {
+            await api('/config/frame', { method: 'POST', body: JSON.stringify({ enabled: want }) });
+        } catch (err) {
+            alert('保存失败:' + (err.message || err));
+        }
+        renderFrameCard();
+    };
+    document.getElementById('frame-theme-save').onclick = async () => {
+        const theme = document.getElementById('frame-theme-input').value;
+        try {
+            // 保存主题 → 后端自动用 AI 后台挑选(非空主题)
+            await api('/config/frame', { method: 'POST', body: JSON.stringify({ theme }) });
+        } catch (err) {
+            alert('保存失败:' + (err.message || err));
+            return;
+        }
+        renderFrameCard();   // 重新拉池大小 + 构建状态
+    };
+    _wireFrameRebuild();
+
+    // 构建中 → 轻量轮询(只刷 AI 状态行,不重渲染整卡 → 不冲掉主题输入框)
+    if (ps.build && ps.build.running) {
+        _framePollTimer = setTimeout(_pollFrameBuild, 2500);
+    }
+}
+
+// 渲染 AI 审核播放列表小节(返回 HTML 串,根节点恒带 id=frame-ai-section,
+// 轮询时只替换这一节,不重渲染整卡 — 否则会冲掉用户正在输入的主题文本框)
+function _renderFrameAiSection(d, ps) {
+    if (!d.theme) {
+        return `<div id="frame-ai-section" class="hint" style="margin:6px 0 0">收藏模式无需 AI 挑选 —— 直接轮播收藏照片。填个主题即可启用 AI 审核。</div>`;
+    }
+    const b = ps.build || {};
+    const saved = ps.saved;
+    const phaseTxt = { planning: '理解主题…', searching: '检索召回…', verifying: 'AI 逐张校验…' }[b.phase] || '处理中…';
+    let inner;
+    if (b.running) {
+        inner = `<span style="color:#2563eb">🤖 AI 正在为「${escapeHtml(b.theme || d.theme)}」挑选照片 · ${phaseTxt}</span>`;
+    } else if (b.phase === 'error' && b.error) {
+        inner = `<span style="color:#b91c1c">🤖 上次 AI 挑选失败:${escapeHtml(b.error)}</span>
+                 <button id="frame-ai-rebuild" class="secondary" style="margin-left:8px">重试</button>`;
+    } else if (saved && saved.theme === d.theme && saved.count != null) {
+        const vtxt = saved.verified_by_llm
+            ? `AI 从 ${saved.candidate_count ?? '?'} 张候选里审定 <b>${saved.count}</b> 张`
+            : `已挑选 <b>${saved.count}</b> 张(人物/收藏类无需 AI 二次校验)`;
+        inner = `🤖 ${vtxt}${saved.built_at ? ` · ${escapeHtml(saved.built_at.slice(0, 16).replace('T', ' '))}` : ''}
+                 <button id="frame-ai-rebuild" class="secondary" style="margin-left:8px">重新挑选</button>`;
+    } else {
+        inner = `🤖 该主题还没用 AI 挑选过(当前回退到普通搜索结果)
+                 <button id="frame-ai-rebuild" style="margin-left:8px">用 AI 挑选</button>`;
+    }
+    return `<div id="frame-ai-section" class="config-form-row" style="align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;margin-top:4px">${inner}</div>`;
+}
+
+// 给「用 AI 挑选 / 重新挑选 / 重试」按钮绑事件(整卡渲染 + 轮询都要调,因为按钮会被重建)
+function _wireFrameRebuild() {
+    const btn = document.getElementById('frame-ai-rebuild');
+    if (!btn) return;
+    btn.onclick = async () => {
+        try {
+            await api('/frame/playlist/rebuild', { method: 'POST', body: JSON.stringify({}) });
+        } catch (err) {
+            alert('重建失败:' + (err.message || err));
+            return;
+        }
+        _pollFrameBuild();   // 立刻进入构建中并开始轮询(不重渲染整卡,保留输入框)
+    };
+}
+
+// 构建期间的轻量轮询:只重拉状态 + 替换 #frame-ai-section 这一节,
+// **不碰主题输入框**,避免冲掉用户正在打的字。
+async function _pollFrameBuild() {
+    if (_framePollTimer) { clearTimeout(_framePollTimer); _framePollTimer = null; }
+    const sec = document.getElementById('frame-ai-section');
+    if (!sec) return;   // 卡片已被整渲染或切走了
+    let d, ps;
+    try {
+        [d, ps] = await Promise.all([api('/config/frame'), api('/frame/playlist/status')]);
+    } catch (e) {
+        return;   // 网络抖动,下次整渲染再说
+    }
+    const cur = document.getElementById('frame-ai-section');
+    if (!cur) return;
+    cur.outerHTML = _renderFrameAiSection(d, ps);
+    _wireFrameRebuild();
+    if (ps.build && ps.build.running) {
+        _framePollTimer = setTimeout(_pollFrameBuild, 2500);
+    }
 }
 
 // 问相册背景知识 — 自由文本,chat.py 每次提问热读注入 prompt,保存即生效
@@ -1312,7 +1484,7 @@ async function refreshThumbs() {
             ${favBadge}
             <div class="cap">${item.identity.original_path.split('/').pop()}</div>
         `;
-        d.onclick = () => showDetail(id);
+        d.onclick = () => openViewer(id);   // 统一走浮层(含原始 JSON),见 chat.js
         grid.appendChild(d);
     });
     if (r.items.length === 0) {
@@ -1322,44 +1494,8 @@ async function refreshThumbs() {
     }
 }
 
-async function showDetail(id) {
-    const rec = await api('/photo/' + encodeURIComponent(id));
-    const d = document.getElementById('photo-detail');
-    d.classList.remove('hidden');
-    const mismatches = rec.role_mismatches || [];
-    const mismatchBanner = mismatches.length > 0 ? `
-        <div class="role-mismatch-banner">
-            <b>提示:语义对齐度差</b>(${mismatches.length} 条) —
-            struct 给的人物 action 和 description 的叙事在邻域里**字面**对不上。
-            可能是同义/不同侧重的表达(LLM 风格差异,description 仍正确),
-            也可能是真错位 — 请人工核对图片确认。
-            <ul>${mismatches.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>
-            <button id="ack-mismatch-btn" data-photo-id="${id}">已核对,忽略此提示</button>
-        </div>` : '';
-    d.innerHTML = `
-        <img src="/api/thumb/${id}" title="1024px 预览(非原图),要看 / 下载原图请用下方按钮">
-        <div class="detail-actions">
-            <a href="/api/original/${encodeURIComponent(id)}?download=1" download>下载原图</a>
-        </div>
-        <h3>${rec.identity.original_path.split('/').pop()}</h3>
-        ${mismatchBanner}
-        <pre>${JSON.stringify(rec, null, 2)}</pre>
-    `;
-    const ackBtn = d.querySelector('#ack-mismatch-btn');
-    if (ackBtn) {
-        ackBtn.onclick = async () => {
-            try {
-                await api(`/photo/${encodeURIComponent(id)}/mismatches/acknowledge`, { method: 'POST' });
-                showDetail(id);   // 重新渲染,banner 消失
-            } catch (e) {
-                alert('失败:' + e.message);
-            }
-        };
-    }
-    d.scrollIntoView({ behavior: 'smooth' });
-}
-
-// (Photo Viewer modal:openViewer / closeViewer 在 chat.js)
+// 照片详情统一走 chat.js 的 openViewer 浮层(含 caption / 描述 / role-mismatch / 原始 JSON)。
+// 旧的内联 showDetail + #photo-detail 已删,browse 和 chat 两端交互一致。
 
 // ---- Faces ----
 async function refreshClusters() {

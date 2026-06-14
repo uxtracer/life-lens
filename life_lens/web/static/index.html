@@ -129,10 +129,25 @@
             </div>
         </div>
 
-        <!-- Card 7: 存储 -->
-        <div class="config-card" data-card="storage">
+        <!-- Card 7: 智能相框(ESP32 等) -->
+        <div class="config-card" data-card="frame">
             <div class="config-card-head">
                 <span class="config-card-step">7</span>
+                <div class="config-card-title">
+                    <h3>🖼️ 智能相框</h3>
+                    <p class="config-card-subtitle">给智能相框/带屏设备开一个只读出图接口,轮播照片 — 独立开关,和「问相册」互不影响</p>
+                </div>
+                <span class="config-card-status" id="card-frame-status">⏳</span>
+            </div>
+            <div class="config-card-body" id="card-frame-body">
+                加载中……
+            </div>
+        </div>
+
+        <!-- Card 8: 存储 -->
+        <div class="config-card" data-card="storage">
+            <div class="config-card-head">
+                <span class="config-card-step">8</span>
                 <div class="config-card-title">
                     <h3>💾 存储</h3>
                 </div>
@@ -262,7 +277,6 @@
     <section id="browse" class="page">
         <div id="browse-header" class="browse-header">加载中……</div>
         <div id="thumb-grid" class="thumb-grid"></div>
-        <div id="photo-detail" class="detail hidden"></div>
     </section>
 
     <!-- ========== Tab 5: 问相册(Chat)========== -->
@@ -284,16 +298,18 @@
 <div id="photo-viewer" class="viewer hidden">
     <div class="viewer-backdrop"></div>
     <div class="viewer-content">
-        <img id="viewer-img" title="1024px 预览(非原图),要看 / 下载原图请用下方按钮">
-        <div class="viewer-meta">
-            <div class="viewer-caption"></div>
-            <div class="viewer-desc"></div>
+        <div class="viewer-main">
+            <img id="viewer-img" title="1024px 预览(非原图),要看 / 下载原图请用下方按钮">
+            <div class="viewer-meta">
+                <div class="viewer-caption"></div>
+                <div class="viewer-desc"></div>
+            </div>
+            <div class="viewer-actions">
+                <a id="viewer-download" download>下载原图</a>
+                <button id="viewer-close">关闭</button>
+            </div>
         </div>
-        <div class="viewer-actions">
-            <a id="viewer-download" download>下载原图</a>
-            <button id="viewer-detail">完整详情 →</button>
-            <button id="viewer-close">关闭</button>
-        </div>
+        <div class="viewer-detail"></div>
     </div>
 </div>
 

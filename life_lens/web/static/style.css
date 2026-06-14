@@ -914,6 +914,99 @@ pre#status-json {
     color: #1f2937;
     line-height: 1.55;
 }
+/* 浮层里的完整详情:role-mismatch 提示 + 折叠的原始 JSON(browse / chat 共用)*/
+.viewer-detail {
+    width: 100%;
+    max-width: 100%;
+    margin-top: 12px;
+}
+.viewer-detail:empty { display: none; }
+/* 问相册页「显示解析原始数据」按钮:推到 viewer-actions 最右(右下角)*/
+.viewer-show-json {
+    margin-left: auto;
+    color: #2563eb;
+    border-color: #93c5fd !important;
+}
+.viewer-show-json:hover { background: #eff6ff !important; }
+/* 桌面问相册紧凑态:固定宽度,图片 contain 居中 —— 浮层宽不随图片宽高变(竖图居中留边)*/
+.viewer-content.viewer-solo {
+    width: min(84vw, 800px);
+    max-width: 96vw;
+}
+.viewer-content.viewer-solo #viewer-img {
+    max-width: 100%;
+    max-height: 74vh;
+    object-fit: contain;
+    background: transparent;     /* 同上:留白处透明 */
+}
+.viewer-json-title {
+    color: #2563eb;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0 2px 6px;
+}
+.viewer-json pre {
+    background: #f5f5f5;
+    padding: 12px;
+    border-radius: 4px;
+    overflow: auto;
+    font-size: 12px;
+    max-height: 50vh;
+    white-space: pre;
+    margin: 6px 0 0;
+}
+/* 桌面端:固定高度的浮层框,左(viewer-main:图/时间地点/描述/按钮)右(JSON)并排。
+   纯 flex 两栏(不用 grid spanning,高度约束可控)。整框不滚,只 JSON 框内部滚。
+   每层都 min-height:0 + overflow:hidden,把高度一层层确定地传到 pre,pre 才成有界滚动容器。 */
+.viewer-content.viewer-wide {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;        /* 左右两栏都拉到 86vh 等高 */
+    gap: 20px;
+    width: min(90vw, 1180px);    /* 浮层宽度固定,不随图片宽高变 */
+    max-width: 96vw;
+    height: 86vh;
+    min-height: 0;
+    overflow: hidden;            /* 覆盖基类 overflow:auto */
+}
+.viewer-content.viewer-wide .viewer-main {
+    flex: 1 1 0;                 /* 左栏弹性占剩余宽 */
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.viewer-content.viewer-wide .viewer-main > #viewer-img {
+    flex: 1 1 0;                 /* 图占满「描述/按钮」之上的剩余高度 */
+    min-height: 0;
+    min-width: 0;
+    max-width: 100%;
+    object-fit: contain;         /* 竖图居中留边,横图填满 */
+    background: transparent;     /* 留白处透明(露白色浮层),不显灰/粉底色 */
+}
+.viewer-content.viewer-wide .viewer-detail {
+    flex: 0 0 420px;             /* 右栏 JSON 固定宽 */
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin-top: 0;
+}
+.viewer-content.viewer-wide .viewer-json {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.viewer-content.viewer-wide .viewer-json pre {
+    flex: 1 1 0;                    /* 占满「banner + summary」之下的剩余空间 */
+    min-height: 0;
+    max-height: none;
+    overflow: auto;                 /* 只有 JSON 框内部滚动 */
+    overscroll-behavior: contain;   /* 滚到顶/底不把滚动链给背后主页面 */
+}
 
 /* ===== Phase 5: 配置卡片 / 扫描子 tab / 全局 banner ===== */
 

@@ -92,6 +92,10 @@ Web Chat 两轮 LLM:Round 1 出 `{action, args}`,Python `_dispatch` 调 `query/`
 
 本机(loopback)永远全功能,不受开关影响。设计决定(2026-06,用户确认):内网可看缩略图 + 原图下载(自己的设备);**不加口令**(信任家庭局域网);开关默认关 = 安全 opt-in。host 仍可用 CLI `--host` 或 config `serve.host` 硬 override(如锁回 127.0.0.1 彻底不监听内网,代价是改了要重启)。
 
+**智能相框是独立的第三层(2026-06,用户确认"新开接口、安全起见")**:`web/frame.py` 一组只读出图端点(`/api/frame/next|photo|playlist|info`),**独立开关** `frame.lan_enabled`(默认关),和 `serve.lan_chat` **互不影响** —— gate 里两个功能各自 `if 开关: 查各自白名单`(`_LAN_FRAME_ALLOW` vs `_LAN_ALLOW`)。相框吐缩放后的 JPEG(默认 1024、`mode=contain|cover`、`quality=90`),不直传原图字节。**出图源:`_pick_source` 优先全分辨率原图(`decode_to_rgb`,单次压缩),原图不在本机才回退 1024/q85 预处理缓存** —— 走缓存是"原图→1024/q85→再压 q82"双重 JPEG + 竖图缓存宽仅 768 横屏 cover 还放大,实测发糊;从原图直接缩到屏幕尺寸是一次干净降采样,质量明显更好(2026-06 用户反馈"模糊"后改)。照片池优先级 `?theme=` > config `frame.theme` > 收藏;**主题三态**(`_resolve_pool`,非 LLM 兜底):空→收藏 / 命中已命名人→**人脸过滤出这个人全部照片**(`persons=`,含模糊兜底)/ 否则→内容搜索(`query=`)。**为什么人名优先走人脸**:名字当内容搜索既漏又混(实测某人 query 前 400 张里 243 张不是他、漏掉 1843 张人脸照,因为 description 不一定写名字)。`/next` 做"洗牌轮播"(进程内 `_Rotator`,一轮内每张恰好一次,池签名变了重洗),元信息走响应头 `X-Photo-Id/Date/Caption`(中文 URL 编码)。配置端点 `GET/POST /api/config/frame` **不在任何 LAN 白名单** —— 相框不能给自己开门/改主题。
+
+**LLM 审核播放列表(2026-06,可控性 + 二道校验 + 灵活检索)**:纯 search 召回宽不可控(语义飘、描述漏名)。复用「问相册」两轮 LLM —— Round 1(`chat._build_round1_system`)把主题翻译成检索条件(人名/时间/地点/**扩词**,比字符串搜灵活),`_dispatch` 召回,再一道 `_llm_verify` 把候选的 description/tags/objects/scene 喂 LLM **只留真正符合主题的**(复用 `chat._short_id_map/_slim_for_llm/_expand_photo_ids` 瘦身还原),产出已审核 `photo_id` 列表落盘 `frame_playlist.json`。**铁律:LLM 只在"设主题 / 点重建"时跑一次(后台线程 `start_build`),`/next` 只读缓存洗牌——绝不每帧调 LLM**;构建未完成/失败/无 provider 时 `/next` 优雅回退非 LLM 池(相框不黑屏)。无 `query` 的纯人名/收藏类**不校验**(人脸已精确,LLM 看不到脸,校验只会误删)。实测「海边」80 候选→审定 71,「美食」Round 1 自动扩词`[食物,餐厅,菜肴...]`→留 72,各 ~50s。构建/状态端点 `POST /api/frame/playlist/rebuild`、`GET /api/frame/playlist/status` **仅本机**(子路径不匹配白名单的 `^/api/frame/playlist$`)。⚠️**隐私**:构建时候选的 description + 短 photo_id 会发给所选 LLM(和「问相册」同级外发,不发图字节)。测试 `tests/test_frame.py`。
+
 ⚠️ **`@app.middleware("http")` 不覆盖 WebSocket** — 将来若加 ws 端点,它会完全绕过 lan_gate(静默旁路)。加 ws 前必须给 gate 补 websocket 维度(或 ASGI 层拦截)。已知接受的暴露面:开关关闭时内网请求仍会走到 uvicorn/h11 的 HTTP 解析(连接能建立,403 在中间件层)— 比绑 127.0.0.1 多出"HTTP 解析层 pre-auth 漏洞"这一层理论风险,家庭场景接受。测试在 `tests/test_lan_gate.py`(TestClient 默认 client host 是 `'testclient'`,`_is_local_client` 视作本机 — 否则全部 API 测试 403;模拟远程显式传 `client=(ip, port)`;config 跟 env `LIFE_LENS_ROOT` 走,fixture 指 tmp_path 隔离真实配置)。
 
 ## 不要做的事
@@ -444,7 +448,8 @@ life_lens/store/schema.sql     改要 bump db.py::SCHEMA_VERSION,启动自动备
 life_lens/store/config.py      config.json 原子写 + chmod 600 + 单字段 update
 life_lens/web/llm.py           openai-compat(claude-p 已删,旧 config 启动忽略 + WARN)
 life_lens/web/chat.py          SSE 两轮 LLM tool loop + jsonl 日志
-life_lens/web/server.py        FastAPI app + LAN gate(_LAN_ALLOW 白名单,内网只开问相册)
+life_lens/web/frame.py         智能相框 LAN 接口(/api/frame/next|photo|playlist|info)— 洗牌轮播 + 缩放出图 + LLM 审核 frame_playlist.json
+life_lens/web/server.py        FastAPI app + LAN gate(_LAN_ALLOW 问相册 + _LAN_FRAME_ALLOW 相框,两个独立开关)
 life_lens/web/static/          vanilla HTML/JS。index.html(桌面 5-tab)+ chat.html(移动端问相册)
                                共用 chat.js(api/viewer/SSE/前缀补全)— index.html 必须先 chat.js 后 app.js
                                (app.js 依赖 chat.js 的全局,两边不要重复声明)

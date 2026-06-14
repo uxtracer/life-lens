@@ -34,23 +34,36 @@ function formatCapturedAt(s) {
 //   - 主图 src = /api/thumb/{id}(1024px JPEG),不是原图 — HEIC 浏览器不能直接渲染,
 //     原图几十 MB 加载慢。三重提示用户右键保存的是缩略图(title + 灰字 note + 按钮分流)
 //   - 两个原图按钮共用 /api/original/{id} 同一文件源,区别只在 ?download=1 头部
-//   - "完整详情 →" 跳 Browse + showDetail(仅桌面页;移动端 chat 页没有 browse tab,隐藏)
+//   - 完整详情(role-mismatch 提示 + 原始 JSON)直接渲染进浮层,browse / chat 两端统一,
+//     不再有"跳 Browse tab 看内联详情"这条岔路(已删 showDetail / #photo-detail)
 async function openViewer(id) {
     const v = document.getElementById('photo-viewer');
     const img = document.getElementById('viewer-img');
     const cap = v.querySelector('.viewer-caption');
     const desc = v.querySelector('.viewer-desc');
     const dlLink = document.getElementById('viewer-download');
-    const detailBtn = document.getElementById('viewer-detail');
+    const detail = v.querySelector('.viewer-detail');
+    const content = v.querySelector('.viewer-content');
+    const actions = v.querySelector('.viewer-actions');
+    // 完整 JSON 只桌面页有(移动端 chat 页只看图+描述)。桌面又分两种:
+    //   - 浏览页(browse tab):JSON 与图并排、默认展开
+    //   - 问相册页(chat tab):默认同移动端只大图+描述,右下角按钮点开才显示 JSON
+    const isDesktop = !!document.querySelector('.tab[data-page="browse"]');
+    const activeTab = document.querySelector('.tab.active');
+    const onBrowse = !!activeTab && activeTab.dataset.page === 'browse';
 
+    img.style.background = '';   // 清掉上一张加载失败时残留的内联粉色底(img 元素复用,否则横图留白处露粉)
     img.src = `/api/thumb/${encodeURIComponent(id)}`;
     img.onerror = () => { img.style.background = '#fee'; };
     dlLink.href = `/api/original/${encodeURIComponent(id)}?download=1`;
     cap.textContent = '加载中……';
     desc.textContent = '';
+    if (detail) detail.innerHTML = '';
+    if (content) content.classList.remove('viewer-wide', 'viewer-solo');
+    if (actions) { const stale = actions.querySelector('.viewer-show-json'); if (stale) stale.remove(); }
     v.classList.remove('hidden');
 
-    // 异步拉详情填 caption / desc
+    // 异步拉详情填 caption / desc /(桌面)完整 JSON
     try {
         const rec = await api('/photo/' + encodeURIComponent(id));
         const time = formatCapturedAt((rec.exif && (rec.exif.captured_at_local || rec.exif.captured_at_utc)) || '') || '(时间未知)';
@@ -61,21 +74,53 @@ async function openViewer(id) {
         cap.textContent = place ? `${time} · ${place}` : time;
         const d = (rec.vision && rec.vision.description) || '';
         desc.textContent = d.length > 220 ? d.slice(0, 220) + '……' : d;
+        if (detail && isDesktop && onBrowse) {
+            renderViewerDetail(detail, id, rec);                 // 浏览页:JSON 并排默认展开
+            if (content) content.classList.add('viewer-wide');
+        } else if (detail && isDesktop && actions) {
+            // 问相册页:默认紧凑固定宽(大图+描述),右下角「显示解析原始数据」点开才并排展示 JSON
+            if (content) content.classList.add('viewer-solo');
+            const toggle = document.createElement('button');
+            toggle.className = 'viewer-show-json';
+            toggle.textContent = '显示原始 JSON';
+            toggle.onclick = () => {
+                renderViewerDetail(detail, id, rec);
+                if (content) { content.classList.remove('viewer-solo'); content.classList.add('viewer-wide'); }
+                toggle.remove();
+            };
+            actions.appendChild(toggle);
+        }
     } catch (e) {
         cap.textContent = `(加载详情失败: ${e.message})`;
     }
+}
 
-    // "完整详情 →" 依赖桌面页的 browse tab + showDetail;移动端 chat 页没有,隐藏按钮
-    const browseTabBtn = document.querySelector('.tab[data-page="browse"]');
-    if (browseTabBtn) {
-        detailBtn.style.display = '';
-        detailBtn.onclick = () => {
-            closeViewer();
-            browseTabBtn.click();
-            setTimeout(() => showDetail(id), 200);
+// 浮层里的「完整详情」:role-mismatch 提示 + 原始 JSON(桌面端默认展开,与图并排)。
+function renderViewerDetail(box, id, rec) {
+    const mism = rec.role_mismatches || [];
+    const banner = mism.length > 0 ? `
+        <div class="role-mismatch-banner">
+            <b>提示:语义对齐度差</b>(${mism.length} 条) —
+            struct 给的人物 action 和 description 叙事在邻域里字面对不上。
+            可能是同义表达(description 仍正确),也可能真错位 — 请人工核对图片确认。
+            <ul>${mism.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>
+            <button class="ack-mismatch-btn">已核对,忽略此提示</button>
+        </div>` : '';
+    // 用 div 而非 details:display:flex 在 <details> 上不约束子元素 flex 高度,
+    // 会导致 pre 撑成内容高、JSON 框滚不到底(已逐层量化定位)。桌面端本就一直展开,不需要折叠。
+    box.innerHTML = banner + `
+        <div class="viewer-json">
+            <div class="viewer-json-title">完整记录(原始 JSON)</div>
+            <pre>${escapeHtml(JSON.stringify(rec, null, 2))}</pre>
+        </div>`;
+    const ack = box.querySelector('.ack-mismatch-btn');
+    if (ack) {
+        ack.onclick = async () => {
+            try {
+                await api(`/photo/${encodeURIComponent(id)}/mismatches/acknowledge`, { method: 'POST' });
+                openViewer(id);   // 重新渲染,banner 消失
+            } catch (e) { alert('失败:' + e.message); }
         };
-    } else {
-        detailBtn.style.display = 'none';
     }
 }
 function closeViewer() {
