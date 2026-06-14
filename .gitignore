@@ -8,6 +8,7 @@ __pycache__/
 # venv
 .venv/
 .venv_lens/
+.venv_lens*/
 venv/
 
 # 数据

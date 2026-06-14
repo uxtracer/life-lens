@@ -26,21 +26,51 @@ ok()   { printf "${G}✓${N} %s\n" "$*"; }
 warn() { printf "${Y}⚠${N} %s\n" "$*"; }
 err()  { printf "${R}✗${N} %s\n" "$*" 1>&2; }
 
+choose_python() {
+    if [ -n "${LIFE_LENS_PYTHON:-}" ]; then
+        if ! command -v "$LIFE_LENS_PYTHON" >/dev/null; then
+            err "LIFE_LENS_PYTHON 指定的解释器不存在: $LIFE_LENS_PYTHON"
+            exit 1
+        fi
+        printf "%s" "$LIFE_LENS_PYTHON"
+        return
+    fi
+
+    # macOS 的 /usr/bin/python3 常停在 3.9;优先找 Homebrew / 用户安装的新版本,
+    # 这样 Apple Photos 新库能拿到 osxphotos>=0.69 所需的 Py 3.10+。
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$candidate" >/dev/null; then
+            if "$candidate" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)" >/dev/null 2>&1; then
+                printf "%s" "$candidate"
+                return
+            fi
+        fi
+    done
+    return 1
+}
+
+python_ge_310() {
+    "$1" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1
+}
+
 # ---- 1. 前置检查 ----
 say "检查 Python 版本..."
-if ! command -v python3 >/dev/null; then
+if ! PYTHON_BIN="$(choose_python)"; then
     err "找不到 python3。请先安装 Python ≥ 3.9 再重试"
     err "  macOS:  brew install python@3.11  或  xcode-select --install"
     err "  Linux:  用包管理器装 python3 + python3-venv"
     exit 1
 fi
-PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_OK=$(python3 -c "import sys; print(1 if sys.version_info >= (3, 9) else 0)")
+PY_VER=$("$PYTHON_BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_OK=$("$PYTHON_BIN" -c "import sys; print(1 if sys.version_info >= (3, 9) else 0)")
 if [ "$PY_OK" != "1" ]; then
     err "Python $PY_VER 太旧,需要 ≥ 3.9"
     exit 1
 fi
-ok "Python $PY_VER"
+ok "Python $PY_VER ($PYTHON_BIN)"
+if [ "$(uname -s)" = "Darwin" ] && ! python_ge_310 "$PYTHON_BIN"; then
+    warn "macOS Apple Photos 新库建议 Python ≥ 3.10;当前只能找到 $PY_VER,可能只能读旧版 Photos 库"
+fi
 
 say "检查 git..."
 command -v git >/dev/null || { err "找不到 git,请先装 git"; exit 1; }
@@ -60,7 +90,16 @@ ok "代码就绪"
 cd "$INSTALL_DIR"
 if [ ! -d .venv_lens ]; then
     say "创建虚拟环境 .venv_lens/..."
-    python3 -m venv .venv_lens
+    "$PYTHON_BIN" -m venv .venv_lens
+elif [ "$(uname -s)" = "Darwin" ] && python_ge_310 "$PYTHON_BIN" && ! python_ge_310 ".venv_lens/bin/python"; then
+    OLD_VER=$(.venv_lens/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "unknown")
+    BACKUP=".venv_lens.py${OLD_VER//./}.bak"
+    if [ -e "$BACKUP" ]; then
+        BACKUP="$BACKUP.$(date +%Y%m%d%H%M%S)"
+    fi
+    warn "已有 .venv_lens 是 Python $OLD_VER;为兼容 Apple Photos 新库,备份到 $BACKUP 并用 $PYTHON_BIN 重建"
+    mv .venv_lens "$BACKUP"
+    "$PYTHON_BIN" -m venv .venv_lens
 fi
 # shellcheck disable=SC1091
 source .venv_lens/bin/activate
@@ -69,8 +108,13 @@ ok "venv 就绪 ($(python --version 2>&1))"
 say "升级 pip..."
 pip install --upgrade pip -q
 
-say "安装 life_lens 主包..."
-pip install -e . -q
+if [ "$(uname -s)" = "Darwin" ]; then
+    say "安装 life_lens 主包(+ Apple Photos 支持)..."
+    pip install -e '.[apple]' -q
+else
+    say "安装 life_lens 主包..."
+    pip install -e . -q
+fi
 
 # pyproject.toml 没声明这些(避免新手装就拉 GB 级 wheel),手动装
 say "安装机器学习依赖(numpy / insightface / onnxruntime / fastembed,~700MB,慢一会)..."
