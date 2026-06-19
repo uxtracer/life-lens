@@ -92,8 +92,9 @@ def add_source(request: Request, body: dict = Body(...)):
             except PermissionError:
                 raise HTTPException(
                     403,
-                    "无法读取 Apple Photos 数据库。请到 系统设置 → 隐私与安全性 → "
-                    "完全磁盘访问权限,把 Terminal/iTerm 勾上,然后重启终端再试。"
+                    "无法读取Apple Photos数据库。请到「系统设置→隐私与安全性→完全磁盘访问权限」,"
+                    "添加并开启启动Life Lens服务的程序(通常是Terminal/iTerm;从Codex启动则添加Codex;无需添加Ollama),"
+                    "然后完全退出并重新打开该程序、重启lens serve后再试。"
                 )
             source_id = f"apple:{p.name}"
             repo.upsert_source(conn, source_id, "photos_library", {"path": str(p)})
@@ -1029,14 +1030,81 @@ def person_photos(request: Request, cluster_id: str):
 
 @router.post("/persons/{cluster_id}/name")
 def name_person(request: Request, cluster_id: str, body: dict = Body(...)):
-    """body: { name: str | null } — null 取消命名"""
+    """命名匿名分组;名字已存在时自动并入已有分组。null取消命名。"""
     name = body.get("name")
     if name is not None:
         name = str(name).strip() or None
+    from ..scanner.reprocess import refill_people_from_faces
+
     conn = _conn(request)
     try:
-        repo.set_person_name(conn, cluster_id, name)
-        return {"ok": True, "cluster_id": cluster_id, "name": name}
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            affected = repo.photo_ids_for_face_cluster(conn, cluster_id)
+            final_cluster_id = cluster_id
+            merged = False
+            if name:
+                existing = conn.execute(
+                    """
+                    SELECT cluster_id FROM persons
+                    WHERE name = ? AND cluster_id != ?
+                    ORDER BY (cluster_id LIKE 'seed_%') DESC, cluster_id
+                    LIMIT 1
+                    """,
+                    (name, cluster_id),
+                ).fetchone()
+                if existing:
+                    final_cluster_id = existing[0]
+                    affected = repo.merge_face_clusters(conn, cluster_id, final_cluster_id)
+                    merged = True
+                else:
+                    repo.set_person_name(conn, cluster_id, name)
+            else:
+                repo.set_person_name(conn, cluster_id, None)
+            refill_people_from_faces(conn, affected)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {
+            "ok": True,
+            "cluster_id": final_cluster_id,
+            "name": name,
+            "merged": merged,
+            "moved_photo_count": len(affected) if merged else 0,
+        }
+    finally:
+        conn.close()
+
+
+@router.post("/face-clusters/{cluster_id}/merge")
+def merge_face_cluster(request: Request, cluster_id: str, body: dict = Body(...)):
+    """把未命名分组并入一个已命名人物。"""
+    target_cluster_id = str(body.get("target_cluster_id") or "").strip()
+    if not target_cluster_id:
+        raise HTTPException(400, "target_cluster_id 不能为空")
+
+    from ..scanner.reprocess import refill_people_from_faces
+
+    conn = _conn(request)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            affected = repo.merge_face_clusters(conn, cluster_id, target_cluster_id)
+            refill_people_from_faces(conn, affected)
+            conn.execute("COMMIT")
+        except ValueError as e:
+            conn.execute("ROLLBACK")
+            raise HTTPException(400, str(e))
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {
+            "ok": True,
+            "source_cluster_id": cluster_id,
+            "target_cluster_id": target_cluster_id,
+            "moved_photo_count": len(affected),
+        }
     finally:
         conn.close()
 

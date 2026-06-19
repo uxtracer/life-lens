@@ -660,6 +660,46 @@ def set_person_name(conn: sqlite3.Connection, cluster_id: str, name: Optional[st
         conn.execute("DELETE FROM persons WHERE cluster_id = ?", (cluster_id,))
 
 
+def merge_face_clusters(
+    conn: sqlite3.Connection,
+    source_cluster_id: str,
+    target_cluster_id: str,
+) -> list[str]:
+    """把一个人脸分组并入已命名分组,返回受影响的主库 photo_id。"""
+    if source_cluster_id == target_cluster_id:
+        raise ValueError("不能把面孔分组并入自身")
+    if not conn.execute(
+        "SELECT 1 FROM faces WHERE cluster_id = ? LIMIT 1", (source_cluster_id,)
+    ).fetchone():
+        raise ValueError("待合并的面孔分组不存在")
+    if not conn.execute(
+        "SELECT 1 FROM persons WHERE cluster_id = ? AND name IS NOT NULL AND name != ''",
+        (target_cluster_id,),
+    ).fetchone():
+        raise ValueError("目标必须是已命名面孔")
+
+    affected_photo_ids = photo_ids_for_face_cluster(conn, source_cluster_id)
+    conn.execute(
+        "UPDATE faces SET cluster_id = ? WHERE cluster_id = ?",
+        (target_cluster_id, source_cluster_id),
+    )
+    conn.execute("DELETE FROM persons WHERE cluster_id = ?", (source_cluster_id,))
+    return affected_photo_ids
+
+
+def photo_ids_for_face_cluster(conn: sqlite3.Connection, cluster_id: str) -> list[str]:
+    """返回某人脸分组涉及的主库photo_id,排除种子图。"""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT f.photo_id FROM faces f
+        JOIN photos p ON p.photo_id = f.photo_id
+        WHERE f.cluster_id = ? AND p.source != 'seed'
+        """,
+        (cluster_id,),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def cluster_name_map(conn: sqlite3.Connection) -> dict[str, str]:
     """全表 cluster_id → name 映射(persons 表)。查询时透明替换用。"""
     rows = conn.execute("SELECT cluster_id, name FROM persons WHERE name IS NOT NULL").fetchall()

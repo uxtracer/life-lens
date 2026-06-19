@@ -372,7 +372,7 @@ argparse,**不要换 click/typer**。**主操作入口是 Web 端**,CLI 兜底�
 - **聚类**:`faces/cluster.py` max-pooling 新脸 vs cluster 内**每个 face embedding** 取 max(非 centroid 平均),阈值默认 0.5
 - **种子人物**:GUI 上传(`/api/seed-persons`),写 `photos.source='seed'` + faces + persons 命名。**种子图不入主库**(所有 list/browse 接口过滤 `source != 'seed'`)
 - **改名透明**:`people.persons[].cluster_id` 锚定,查询时 join `persons` 表 resolve 真名,改名不重跑 vision。`vision.description` 死字符串接受不一致
-- **Apple 命名映射**:source 解 `face_info.name` → `cluster_id='apple:<name>'`,Apple 检测未命名 → `apple_face:<uuid>`(在 life_lens 命名无意义,引导回 Photos.app)
+- **Apple 命名映射**:source 解 `face_info.name` → `cluster_id='apple:<name>'`,Apple检测未命名 → `apple_face:<uuid>`(跨照片不聚类);Web端可把待命名脸手动并入已有姓名并同步`people.persons[]`
 
 ### 两种重跑
 

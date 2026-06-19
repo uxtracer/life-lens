@@ -340,6 +340,16 @@ button.primary:hover { background: #1d4ed8; }
     border-radius: 4px;
     font-size: 13px;
 }
+.cluster-card .merge-form { margin-top: 8px; }
+.cluster-card .name-form select {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 13px;
+}
 .cluster-card .name-form button {
     padding: 6px 12px;
     background: #2563eb;
@@ -358,6 +368,23 @@ button.primary:hover { background: #1d4ed8; }
     font-weight: normal;
     font-style: italic;
 }
+
+.photos-permission-guide {
+    margin: 12px 0 14px;
+    padding: 12px 14px;
+    border: 1px solid #f0c36d;
+    border-radius: 8px;
+    background: #fff9e8;
+    color: #4b3a12;
+    font-size: 13px;
+    line-height: 1.6;
+}
+.photos-permission-title { font-weight: 700; margin-bottom: 4px; }
+.photos-permission-guide p { margin: 4px 0; }
+.photos-permission-guide ol { margin: 6px 0 8px; padding-left: 22px; }
+.photos-permission-guide li { margin: 3px 0; }
+.photos-permission-guide a { color: #1d4ed8; }
+.photos-permission-note { color: #725514; }
 code {
     background: #f0f0f0;
     padding: 1px 5px;

@@ -454,6 +454,7 @@ snapshot 是 self-contained 普通 SQLite 文件,拷哪都行。
   - meta.errors 新增 `vision_role_mismatch` group(可能误报)
 - Phase 3(2026-05)Apple Photos source 接入:
   - source='photos_library' 行的 face cluster_id 用 `apple:<name>`(命名)或 `apple_face:<face_uuid>`(未命名,跨照片不聚类)
+  - Web「未命名面孔」可把`apple_face:*`或InsightFace匿名分组手动并入已有`cluster_id`,并同步受影响照片的`people.persons[]`
   - face_info 漏识别时 pipeline fallback InsightFace,所以 source='photos_library' 的照片也会有 `c_xxx` cluster
 - Phase 4(2026-05)语义向量检索:
   - 新表 **photo_embeddings**(bge-small-zh-v1.5,512 维 float32 BLOB)— 见上面表结构
