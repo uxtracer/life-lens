@@ -88,7 +88,7 @@ sources / jobs                -- 扫描调度,通常你不用看
 
 ```jsonc
 {
-  "description": "黄昏外滩,张三举相机自拍,李四靠栏杆看江景...",   // 80-200 字中文叙事
+  "description": "暮色压低远处楼群,江面映着岸边灯光。张三举起相机,李四靠在栏杆旁望向水面...", // 60-180字客观描述
   "media_type": "photo|screenshot|other",
   "subject":    "single|portrait|group|landscape|object|food|pet|mixed|null",
   "scene":      "外滩夜景",                                       // 自由文本
@@ -443,7 +443,7 @@ snapshot 是 self-contained 普通 SQLite 文件,拷哪都行。
 
 ## 版本
 
-- 写于 schema v0.1 + **vision prompt v9.2** + derived rules-v2-geocode
+- 写于 schema v0.1 + **description prompt v9.7 / struct prompt v9.2** + derived rules-v2-geocode
 - Phase 2(2026-05)主要变化:
   - photos_fts tokenizer 改 trigram(中文支持,但限 ≥ 3 字)
   - location_bucket.place_name 优先 POI(以前 AOI 优先)

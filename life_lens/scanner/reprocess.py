@@ -238,8 +238,13 @@ def reprocess_vision_for(root: Path, photo_ids: list[str], model: str = None) ->
                         face_items_for_prompt = face_items
 
                 # 4. 两次 LLM 调用
-                desc_res = vision.describe_description(jpeg_bytes, face_items=face_items_for_prompt or None)
                 struct_res = vision.describe_struct(jpeg_bytes, face_items=face_items_for_prompt or None)
+                subject_hint = (struct_res.parsed or {}).get("subject")
+                desc_res = vision.describe_description(
+                    jpeg_bytes,
+                    face_items=face_items_for_prompt or None,
+                    subject_hint=subject_hint,
+                )
 
                 # 5. 合并 vision group(不含 actions)
                 new_vision: dict = {}

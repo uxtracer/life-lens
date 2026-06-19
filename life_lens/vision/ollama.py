@@ -19,6 +19,7 @@ import requests
 from .base import VisionModel, VisionResult
 from .prompts import (
     build_description_prompt, build_struct_prompt,
+    description_person_claims,
     normalize_description, normalize_struct,
     DESCRIPTION_PROMPT_VERSION, STRUCT_PROMPT_VERSION,
 )
@@ -115,13 +116,42 @@ class OllamaVision(VisionModel):
         self,
         jpeg_bytes: bytes,
         face_items: Optional[list[tuple[int, Optional[str]]]] = None,
+        subject_hint: Optional[str] = None,
     ) -> VisionResult:
-        prompt = build_description_prompt(face_items)
+        prompt = build_description_prompt(face_items, subject_hint=subject_hint)
         result = self._call(jpeg_bytes, prompt)
         if result.parsed:
             normalized, warns = normalize_description(result.parsed)
             result.parsed = normalized
             result.warnings = (result.warnings or []) + warns
+        # 关键不变量不能只靠prompt:struct确认无人风景且未检测到脸时,
+        # description出现明确人物词→本地纠错重写一次;仍失败则拒收。
+        if (
+            subject_hint == "landscape"
+            and not face_items
+            and result.parsed
+            and description_person_claims(result.parsed.get("description", ""))
+        ):
+            correction = (
+                prompt
+                + "\n纠错:上一版违反了无人风景约束。重新从原图写description,只写自然景物和可见环境,"
+                  "绝对不要出现任何人物、人影或人物动作。只输出JSON。"
+            )
+            retry = self._call(jpeg_bytes, correction)
+            if retry.parsed:
+                normalized, warns = normalize_description(retry.parsed)
+                retry.parsed = normalized
+                retry.warnings = (retry.warnings or []) + warns
+            claims = description_person_claims(
+                (retry.parsed or {}).get("description", "")
+            )
+            if claims:
+                retry.parsed = None
+                retry.error = "landscape_person_hallucination_after_retry"
+                retry.warnings = (retry.warnings or []) + [
+                    "无人风景description两次出现人物词,已拒收"
+                ]
+            return retry
         return result
 
     def describe_struct(
