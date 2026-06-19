@@ -168,8 +168,13 @@ def process_one(
 
             # Ollama 串行(同一进程 Ollama 单实例不能并行),用 lock 保证 semaphore=1
             def _run_vision():
-                desc_res = vision.describe_description(jpeg_for_llm, face_items=face_items_for_prompt or None)
                 struct_res = vision.describe_struct(jpeg_for_llm, face_items=face_items_for_prompt or None)
+                subject_hint = (struct_res.parsed or {}).get("subject")
+                desc_res = vision.describe_description(
+                    jpeg_for_llm,
+                    face_items=face_items_for_prompt or None,
+                    subject_hint=subject_hint,
+                )
                 return desc_res, struct_res
             if vision_lock is not None:
                 with vision_lock:

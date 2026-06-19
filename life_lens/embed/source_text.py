@@ -1,7 +1,7 @@
 """从 photo record 的 vision/people 字段拼出用于 embedding 的中文文本。
 
 拼接字段:description + scene + tags + objects + mood + actions
-- description:主叙事(LLM 80-200 字),信息量大但关键词被稀释
+- description:主描述(LLM 60-180字),信息量大但关键词被稀释
 - scene / tags / objects:精炼关键词(物品/活动名),对短 query "裙子→连衣裙" 这类匹配关键
 - mood / actions:辅助
 

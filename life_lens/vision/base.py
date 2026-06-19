@@ -31,8 +31,9 @@ class VisionModel(ABC):
         self,
         jpeg_bytes: bytes,
         face_items: Optional[list[tuple[int, Optional[str]]]] = None,
+        subject_hint: Optional[str] = None,
     ) -> VisionResult:
-        """Call 1 — 生成 description(80-200 字叙事段落,带 set-of-mark 强人名约束)。
+        """Call 1 — 生成description(60-180字客观记录,带set-of-mark强人名约束)。
         输入应该是 annotate 后的图(带红框 + 编号)。
         """
         ...

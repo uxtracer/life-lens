@@ -295,13 +295,13 @@ Ollama 上 `qwen3-vl:8b`(不带后缀)拉到的是 **thinking 变体**(`/api/sho
 - `derived.location_bucket` 优先级:**国内 GPS → 高德 reverse**;**国外 GPS → Apple `place_apple` 解析**(`parse_place_apple`,高德对境外短路返 None 时);**无 GPS → album 名兜底**。三路都填同构字段(country/province/city/poi_name/place_name/formatted_address),跟 GPS 同 `_build_formatted_address` 格式;全失败 graceful 全 null。见「踩过的坑 / 国外 GPS」
 - `meta.errors[]` 装 self-check / vision_role_mismatch,带 `acknowledged` 字段
 
-## Vision Prompt v9.2 要点
+## Vision Prompt当前要点(description v9.7 / struct v9.2)
 
 **为什么拆**:8B 小模型单次长 prompt 注意力分散。两次调用 image-tokens KV cache 命中,只多 10-20% 时间。
 
 **v9.2 增量**:每个 `[N]` 编号注入位置 hint(face bbox → 9 宫格,100% 准)+ age/gender 弱辅助(标"参考估计")。评测 baseline v9.1 8/11 → v9.2 11/11 PASS。
 
-**Call 1 DESCRIPTION_PROMPT**(`v9.2-desc-2026-05-position-hint`):set-of-mark 图 + `[1]=张三(位置:下中;参考估计:约 11 岁、男(可能不准))` + 末尾"先逐一对照红框真实位置和给的标签,确认 [N]→人映射,再开始写" → `{"description": "..."}` 80-200 字。
+**Call 1 DESCRIPTION_PROMPT**(`v9.7-desc-2026-06-strict-factual`):保留v9.2的set-of-mark位置/人口属性弱提示和真名错位防护,写60-180字客观记录。恢复硬禁推测词,禁止不可见声音/气味/体感和静态照片中的臆造运动;未检测到脸时注入无人场景防造人约束。保留背景路人省略和按画面重心决定详略,主体有辨识度的服饰写具体颜色/类型/图案,不能泛化为"衣着素净"。
 
 **Call 2 STRUCT_PROMPT**(`v9.2-struct-2026-05-position-hint`):同样图 + 位置 hint → `{ media_type, subject, scene, objects, tags, ocr_text, mood, actions{} }`,**actions 是 dict** `{"1": "...", "2": "..."}`。
 
@@ -399,7 +399,7 @@ pytest tests/ -v
 # B 层评测集回归(改 prompt / vision 模型必跑) — 11 张人工 ground truth
 python tests/eval/run_eval.py                  # 全部
 python tests/eval/run_eval.py --case IMG_0685  # 单张
-# 目标:11/11 PASS(baseline v9.1 是 8/11,v9.2 是 11/11)
+# v9.2 baseline为11/11 PASS;description prompt升级后应重新跑B层确认
 
 # 烟测:小样本目录
 lens scan ~/Pictures/test_album
@@ -438,7 +438,7 @@ life_lens/scanner/derived.py   派生规则,改了 reprocess --group derived(loc
 life_lens/scanner/album.py     相册名→国家/城市/景点+事件关键词(本地 Ollama 解析 + album_parse_cache 去重缓存)
 life_lens/scanner/runner.py    Phase A/B + graceful stop + 拍照时间正序 + amap quota 监控
 life_lens/scanner/reprocess.py rematch/reprocess_faces + reprocess_vision_for + reprocess_albums(run 范围+dry_run)+ select_photos
-life_lens/vision/prompts.py    v9.2 + _bbox_position(9 宫格)+ _desc/_struct_set_of_mark
+life_lens/vision/prompts.py    description v9.7 + struct v9.2 + _bbox_position(9宫格)+ _desc/_struct_set_of_mark
 life_lens/vision/role_check.py description ↔ persons.actions 自检
 life_lens/geocode/amap.py      WGS-84→GCJ-02 + 50m 网格 + 配额 + POI 距离最近 + 国外短路(_out_of_china/_has_location)+ parse_place_apple(国外靠 Apple 透传)
 life_lens/embed/               source_text 拼接(含 objects) + Embedder singleton
