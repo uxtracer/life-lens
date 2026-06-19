@@ -646,7 +646,7 @@ def select_photos(
     return [r[0] for r in rows]
 
 
-def _refill_vision_names(conn) -> None:
+def refill_people_from_faces(conn, photo_ids: list[str] | None = None) -> None:
     """对每张 photo,根据当前 faces 表的 cluster_id 同步重建 people.persons[]。
 
     保留旧 action 描述(LLM 写的不变),只更新 cluster_id 和 name 部分。
@@ -654,9 +654,19 @@ def _refill_vision_names(conn) -> None:
     """
     import json
     name_map = repo.cluster_name_map(conn)
-    rows = conn.execute(
-        "SELECT photo_id, people FROM photos WHERE source != 'seed'"
-    ).fetchall()
+    if photo_ids:
+        placeholders = ",".join(["?"] * len(photo_ids))
+        rows = conn.execute(
+            f"SELECT photo_id, people FROM photos "
+            f"WHERE source != 'seed' AND photo_id IN ({placeholders})",
+            photo_ids,
+        ).fetchall()
+    elif photo_ids == []:
+        rows = []
+    else:
+        rows = conn.execute(
+            "SELECT photo_id, people FROM photos WHERE source != 'seed'"
+        ).fetchall()
     for r in rows:
         pid = r["photo_id"]
         old_people = json.loads(r["people"]) if r["people"] else {}
@@ -680,3 +690,6 @@ def _refill_vision_names(conn) -> None:
             "UPDATE photos SET people = ?, updated_at = ? WHERE photo_id = ?",
             (json.dumps(new_people, ensure_ascii=False), repo.now_iso(), pid),
         )
+
+
+_refill_vision_names = refill_people_from_faces

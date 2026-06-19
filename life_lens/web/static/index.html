@@ -101,7 +101,19 @@
                 <span class="config-card-status" id="card-sources-status">⏳</span>
             </div>
             <div class="config-card-body">
-                <p class="hint">添加照片目录。任意含 jpg/heic 的本地路径,或 macOS Apple Photos 库(`~/Pictures/Photos Library.photoslibrary`)。Apple 路径首次会弹系统授权,允许"完全磁盘访问"后才能读。</p>
+                <p class="hint">添加任意含jpg/heic的本地目录,或macOS Apple Photos图库(<code>~/Pictures/Photos Library.photoslibrary</code>)。</p>
+                <div class="photos-permission-guide">
+                    <div class="photos-permission-title"> 使用Apple Photos前,请先授予完全磁盘访问权限</div>
+                    <p>Life Lens需要直接读取Photos图库数据库、原图及相册/人物元数据。这个权限不会自动弹窗,需要手动开启:</p>
+                    <ol>
+                        <li>打开「系统设置」→「隐私与安全性」→「完全磁盘访问权限」。</li>
+                        <li>点按列表下方的「+」,添加并开启<strong>启动Life Lens服务的程序</strong>:通常是Terminal或iTerm;如果从Codex启动,请添加Codex。<strong>不需要添加Ollama</strong>。</li>
+                        <li>完全退出并重新打开该程序,再重新启动<code>lens serve</code>。只刷新网页不会让新权限生效。</li>
+                        <li>回到这里点「选Photos库」,选择<code>图片/Photos Library.photoslibrary</code>,然后点「添加」。</li>
+                    </ol>
+                    <p class="photos-permission-note">为什么不是Ollama?Life Lens先读取图库并把照片预处理成1024px JPEG,再通过本机HTTP交给Ollama分析;Ollama本身不打开Photos图库。仅在「照片」权限中允许访问通常不够,因为这里读取的是图库包内数据库和文件。</p>
+                    <a href="https://support.apple.com/zh-cn/guide/mac-help/mchl211c911f/mac" target="_blank" rel="noopener">查看Apple官方「隐私与安全性」说明↗</a>
+                </div>
                 <form id="add-source-form">
                     <div class="config-form-row">
                         <input type="text" id="source-path" placeholder="点右边按钮选文件夹,或手动粘贴绝对路径" required>
@@ -160,7 +172,7 @@
 
     <!-- ========== Tab 2: 面孔 ========== -->
     <section id="faces" class="page">
-        <p class="hint"><b>强烈建议先准备好核心面孔再扫描，这样扫描的时候可以直接把照片里的姓名对应上，避免后续重跑。</b> <br/>如果是 Apple Photos 数据源，系统可以直接读取其内部已识别并命名好的面孔信息，用户在 Photos App 里配置好即可。其它数据源可以在这里手动添加面孔，每个面孔 3-5 张单人照，最好是不同角度或者不同面部特征。<br/>后续使用过程中也可以在此界面持续更新姓名，只是更新后会触发相关照片重新扫描。</p>
+        <p class="hint"><b>强烈建议先准备好核心面孔再扫描,这样生成description时可以直接使用姓名,避免后续重跑vision。</b><br>Apple Photos数据源会读取其中已命名的人物;未命名或漏识别的脸也可以在下方手动并入已有姓名。其它数据源可上传每人3-5张不同角度的单人照作为种子。<br>命名或归并会立即更新结构化人物查询,但已经生成的description是历史文本,需要重跑vision才会改写其中的称呼。</p>
 
         <!-- 已命名面孔 -->
         <div class="faces-section">

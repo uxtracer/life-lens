@@ -1499,7 +1499,8 @@ async function refreshThumbs() {
 
 // ---- Faces ----
 async function refreshClusters() {
-    await Promise.all([refreshSeeds(), refreshAnonClusters()]);
+    const { persons } = await api('/persons');
+    await Promise.all([refreshSeeds(persons), refreshAnonClusters(persons)]);
 }
 
 // (appendUncitedPhotos / renderTrace 在 chat.js)
@@ -1519,8 +1520,8 @@ function sourceBadge(clusterId) {
 }
 
 // 已命名面孔(种子 + 已命名分组统一展示)
-async function refreshSeeds() {
-    const { persons } = await api('/persons');
+async function refreshSeeds(persons = null) {
+    if (!persons) ({ persons } = await api('/persons'));
     const list = document.getElementById('seed-list');
     list.innerHTML = '';
     if (persons.length === 0) {
@@ -1557,7 +1558,7 @@ async function refreshSeeds() {
 }
 
 // 匿名 cluster
-async function refreshAnonClusters() {
+async function refreshAnonClusters(namedPersons = []) {
     const { clusters } = await api('/face-clusters');
     const list = document.getElementById('cluster-list');
     list.innerHTML = '';
@@ -1568,19 +1569,19 @@ async function refreshAnonClusters() {
     clusters.forEach(c => {
         const card = document.createElement('div');
         card.className = 'cluster-card';
-        // apple_face: 是 Apple Photos 检测到但没在 Photos.app 命名的脸,在我们这里命名只对单张照片有效
-        // (Apple FaceInfo.uuid 每张脸独立,不跨照片聚类)→ 改成显示引导文字,不让用户在这里输入
-        const isAppleAnon = c.cluster_id.startsWith('apple_face:');
-        const formHtml = isAppleAnon
-            ? `<p class="hint" style="margin:8px 0 0;font-size:12px">
-                 这是 Apple Photos 检测到的脸,但你在「照片」应用里还没给它命名。<br>
-                 请到 macOS「照片」App 里命名这个人,系统会把同一个人在所有照片里的脸聚类。
-                 之后这里重新扫描或重跑 faces,会自动出现一张已命名的 <b>Apple Photos</b> 卡。
-               </p>`
-            : `<div class="name-form">
-                 <input type="text" placeholder="给这个人起个名字">
-                 <button class="primary">保存</button>
-               </div>`;
+        const mergeOptions = namedPersons.map(p =>
+            `<option value="${escapeHtml(p.cluster_id)}">${escapeHtml(p.name)} · ${p.total_face_count || 0} 张</option>`
+        ).join('');
+        const mergeHtml = namedPersons.length
+            ? `<div class="name-form merge-form">
+                 <select aria-label="并入已有面孔">${mergeOptions}</select>
+                 <button class="merge-person">并入已有</button>
+               </div>`
+            : '';
+        const formHtml = `<div class="name-form">
+                 <input type="text" placeholder="给这个人起个新名字">
+                 <button class="primary save-name">新建人物</button>
+               </div>${mergeHtml}`;
         card.innerHTML = `
             <div class="head">
                 <span class="person-name unnamed">未命名${sourceBadge(c.cluster_id)}</span>
@@ -1591,12 +1592,8 @@ async function refreshAnonClusters() {
             </div>
             ${formHtml}
         `;
-        if (isAppleAnon) {
-            list.appendChild(card);
-            return;
-        }
         const input = card.querySelector('input');
-        const btn = card.querySelector('button');
+        const btn = card.querySelector('.save-name');
         btn.onclick = async () => {
             const name = input.value.trim();
             if (!name) return;
@@ -1607,6 +1604,18 @@ async function refreshAnonClusters() {
             refreshClusters();
         };
         input.addEventListener('keydown', e => { if (e.key === 'Enter') btn.click(); });
+        const mergeBtn = card.querySelector('.merge-person');
+        if (mergeBtn) mergeBtn.onclick = async () => {
+            const select = card.querySelector('.merge-form select');
+            const target = select.value;
+            const targetName = select.options[select.selectedIndex].textContent;
+            if (!confirm(`确定把这组未识别面孔并入「${targetName}」?`)) return;
+            await api('/face-clusters/' + encodeURIComponent(c.cluster_id) + '/merge', {
+                method: 'POST',
+                body: JSON.stringify({ target_cluster_id: target }),
+            });
+            refreshClusters();
+        };
         list.appendChild(card);
     });
 }
